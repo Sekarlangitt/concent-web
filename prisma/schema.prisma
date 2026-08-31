@@ -1,0 +1,87 @@
+// Prisma schema for the President University Concentration Recommendation System.
+// Database: Supabase PostgreSQL
+// Provider: postgresql
+//
+// Connection URLs are NOT declared here. Prisma 7 configures the CLI
+// datasource in prisma.config.ts. The application runtime passes
+// `datasourceUrl` when constructing PrismaClient (see lib/prisma.ts).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Major {
+  INFORMATICS
+  INFORMATION_SYSTEMS
+}
+
+enum Concentration {
+  CYBER_SECURITY
+  IOT
+  AI
+  AI_HEALTHCARE
+  GAME_DEVELOPMENT
+  DEVOPS
+  DATA_SCIENCE
+  ERP
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Assessment {
+  id                       String            @id @default(cuid())
+  fullName                 String
+  major                    Major
+  recommendedConcentration Concentration
+  recommendedScore         Float
+  confidenceLabel          String?
+  createdAt                DateTime          @default(now())
+  completedAt              DateTime?
+  answers                  AssessmentAnswer[]
+  concentrationScores      ConcentrationScore[]
+}
+
+model AssessmentAnswer {
+  id           String     @id @default(cuid())
+  assessmentId String
+  questionId   String
+  answerKey    String
+  numericValue Int?
+  createdAt    DateTime   @default(now())
+  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@unique([assessmentId, questionId])
+  @@index([assessmentId])
+}
+
+model ConcentrationScore {
+  id               String        @id @default(cuid())
+  assessmentId     String
+  concentration    Concentration
+  rawScore         Float
+  normalizedScore  Float
+  createdAt        DateTime      @default(now())
+  assessment       Assessment    @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@unique([assessmentId, concentration])
+  @@index([assessmentId])
+}

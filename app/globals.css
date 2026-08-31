@@ -1,26 +1,103 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  /* President University brand palette (navy blue) */
+  --color-brand-50: #eef3fb;
+  --color-brand-100: #dce6f5;
+  --color-brand-200: #b9cdea;
+  --color-brand-300: #8aabda;
+  --color-brand-400: #5a83c4;
+  --color-brand-500: #3a62a8;
+  --color-brand-600: #2a4b8c;
+  --color-brand-700: #1d3974;
+  --color-brand-800: #122a5c;
+  --color-brand-900: #0b1d45;
+  --color-brand-950: #061229;
+
+  /* Red accent */
+  --color-accent-50: #fdf0f1;
+  --color-accent-100: #fbdadd;
+  --color-accent-200: #f6b3b9;
+  --color-accent-300: #ee8590;
+  --color-accent-400: #e05466;
+  --color-accent-500: #c8102e;
+  --color-accent-600: #a90d27;
+  --color-accent-700: #8a0c21;
+  --color-accent-800: #6a0a1a;
+  --color-accent-900: #460610;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@layer base {
+  body {
+    @apply bg-white font-sans text-slate-900 antialiased;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Visible keyboard focus state for all interactive controls */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 2px #ffffff,
+      0 0 0 4px var(--color-brand-600);
+  }
+}
+
+/*
+ * Subtle entrance for each newly shown question. Academic, not game-like:
+ * a quick fade with a small upward shift. Disabled entirely under
+ * prefers-reduced-motion.
+ */
+.question-fade-in {
+  animation: question-fade-in 0.18s ease-out both;
+}
+
+@keyframes question-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .question-fade-in {
+    animation: none;
+  }
+
+  /* Loading spinners and pulse skeletons still communicate status, but at a
+   * sedate pace for users who prefer reduced motion. */
+  .animate-spin {
+    animation-duration: 2.5s;
+  }
+  .animate-pulse {
+    animation-duration: 3.5s;
+  }
+}
+
+/*
+ * Focus ring for answer option cards. The card is a <label> wrapping a
+ * visually-hidden radio input, so the label itself is not focusable; this
+ * utility mirrors `focus-ring` using :has() so the whole card lights up
+ * whenever its inner radio receives keyboard focus.
+ */
+@utility option-card {
+  &:has(input:focus-visible) {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow:
+      0 0 0 2px #ffffff,
+      0 0 0 4px var(--color-brand-600);
+  }
 }
