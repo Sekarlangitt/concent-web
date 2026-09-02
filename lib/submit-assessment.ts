@@ -6,17 +6,20 @@ import type { Major } from "@/lib/major";
  *
  * Sends only the minimal payload to POST /api/assessments:
  *
- *   { fullName, major, answers }
+ *   { fullName, major, questionnaireVersionId, answers }
  *
  * The server is the only authority for scoring: weights, raw scores,
  * normalized scores, the recommendation, and the confidence label are all
- * derived server-side. This helper never constructs or sends them.
+ * derived server-side from the database weights of the locked questionnaire
+ * version. This helper never constructs or sends them.
  */
 
 export type AssessmentSubmissionPayload = {
   fullName: string;
   major: Major;
-  /** Answers keyed by stable question id → stable option id. */
+  /** The questionnaire version the student was locked to on start. */
+  questionnaireVersionId: string;
+  /** Answers keyed by question id → selected option id. */
   answers: Record<string, string>;
 };
 

@@ -14,7 +14,11 @@ import { SESSION_TOKEN_ALGORITHM } from "@/lib/auth/config";
 
 const SECRET = "unit-test-secret-0123456789-abcdefghijklmnop";
 const OTHER_SECRET = "unit-test-other-secret-0123456789-abcdefgh";
-const ADMIN = { adminId: "cm_123", email: "admin@president.ac.id" };
+const ADMIN = {
+  adminId: "cm_123",
+  username: "admin",
+  email: "admin@president.ac.id",
+};
 
 describe("signSessionToken / verifySessionToken", () => {
   it("verifies a freshly signed, unexpired session", async () => {
@@ -22,7 +26,7 @@ describe("signSessionToken / verifySessionToken", () => {
     const session = await verifySessionToken(token, SECRET);
 
     expect(session).not.toBeNull();
-    expect(session).toEqual({ adminId: ADMIN.adminId, email: ADMIN.email });
+    expect(session).toEqual(ADMIN);
   });
 
   it("treats a missing or empty token as unauthenticated", async () => {

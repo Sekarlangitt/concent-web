@@ -65,5 +65,6 @@ export type RenderableQuestion = {
   type: QuestionType;
   text: string;
   category?: string;
+  helpText?: string | null;
   options: readonly RenderableQuestionOption[];
 };

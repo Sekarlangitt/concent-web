@@ -116,6 +116,12 @@ export function QuestionRenderer({
         <p className="mt-2 text-sm text-slate-500">{hint}</p>
       ) : null}
 
+      {question.helpText ? (
+        <p className="mt-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+          {question.helpText}
+        </p>
+      ) : null}
+
       <fieldset className="mt-5">
         <legend className="sr-only">
           Answer options for question {questionNumber}

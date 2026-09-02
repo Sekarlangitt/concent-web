@@ -25,6 +25,7 @@ export const BCRYPT_SALT_ROUNDS = 12;
 export const ADMIN_LOGIN_ROUTE = "/admin/login";
 export const ADMIN_DASHBOARD_ROUTE = "/admin/dashboard";
 export const ADMIN_ASSESSMENTS_ROUTE = "/admin/assessments";
+export const ADMIN_QUESTIONS_ROUTE = "/admin/questions";
 
 
 /** Lightweight per-process login rate limit (see lib/auth/rate-limit.ts). */

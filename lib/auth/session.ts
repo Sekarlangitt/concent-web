@@ -30,11 +30,12 @@ export type AdminSession = AdminSessionClaims;
 /** Creates the HttpOnly session cookie for a verified admin. */
 export async function createAdminSession(admin: {
   id: string;
+  username: string;
   email: string;
 }): Promise<void> {
   const secret = getAuthSecret();
   const token = await signSessionToken(
-    { adminId: admin.id, email: admin.email },
+    { adminId: admin.id, username: admin.username, email: admin.email },
     secret,
     ADMIN_SESSION_DURATION_SECONDS,
   );

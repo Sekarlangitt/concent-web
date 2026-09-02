@@ -84,9 +84,31 @@ export default async function AdminAssessmentDetailPage({
   const storedAnswers = assessment.answers.map((answer) => ({
     questionId: answer.questionId,
     answerKey: answer.answerKey,
+    optionId: answer.optionId,
     numericValue: answer.numericValue,
+    questionSnapshot: answer.questionSnapshot,
+    answerSnapshot: answer.answerSnapshot,
   }));
-  const answerRows = resolveAssessmentAnswers(assessment.major, storedAnswers);
+
+  // Resolution uses the referenced questionnaire version's questions first
+  // (immutable once published), then stored snapshots, then the legacy bank.
+  const versionQuestions = assessment.questionnaireVersion?.questions.map(
+    (question) => ({
+      id: question.id,
+      order: question.order,
+      type: question.type,
+      text: question.text,
+      options: question.options.map((option) => ({
+        id: option.id,
+        label: option.label,
+      })),
+    }),
+  );
+  const answerRows = resolveAssessmentAnswers(
+    assessment.major,
+    storedAnswers,
+    versionQuestions,
+  );
   const completeness = getAnswerCompleteness(assessment.major, storedAnswers.length);
   const scores = resolveConcentrationScores(
     assessment.major,
@@ -97,6 +119,10 @@ export default async function AdminAssessmentDetailPage({
       normalizedScore: score.normalizedScore,
     })),
   );
+
+  const versionLabel = assessment.questionnaireVersion
+    ? `${getMajorLabel(assessment.major)} Version ${assessment.questionnaireVersion.versionNumber}`
+    : "Legacy Questionnaire";
 
   const completedDateTime = new Intl.DateTimeFormat("en-GB", {
     day: "2-digit",
@@ -113,6 +139,7 @@ export default async function AdminAssessmentDetailPage({
       assessmentId={assessment.id}
       fullName={assessment.fullName}
       majorLabel={getMajorLabel(assessment.major)}
+      questionnaireVersionLabel={versionLabel}
       completedDateTime={completedDateTime}
       recommendedLabel={getConcentrationLabel(assessment.recommendedConcentration)}
       recommendedScore={formatSuitabilityScore(assessment.recommendedScore)}
@@ -129,6 +156,7 @@ type DetailContentProps = {
   assessmentId: string;
   fullName: string;
   majorLabel: string;
+  questionnaireVersionLabel: string;
   completedDateTime: string;
   recommendedLabel: string;
   recommendedScore: string;
@@ -143,6 +171,7 @@ function AssessmentDetailContent({
   assessmentId,
   fullName,
   majorLabel,
+  questionnaireVersionLabel,
   completedDateTime,
   recommendedLabel,
   recommendedScore,
@@ -176,6 +205,7 @@ function AssessmentDetailContent({
         <dl className="mt-4 grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <SummaryItem label="Student" value={fullName} />
           <SummaryItem label="Major" value={majorLabel} />
+          <SummaryItem label="Questionnaire Version" value={questionnaireVersionLabel} />
           <SummaryItem label="Completed" value={completedDateTime} />
           <SummaryItem label="Recommended Concentration" value={recommendedLabel} />
           <SummaryItem label="Suitability Score" value={recommendedScore} />

@@ -53,9 +53,15 @@ export type InformationSystemsConcentrationTotals = Record<
  * concentration appears with among that question's options (0 when absent).
  * Summing that across all questions yields the theoretical maximum raw score
  * per concentration — the basis for the later normalization step.
+ *
+ * The parameter type is intentionally structural (options with weights) so it
+ * accepts both the legacy TypeScript question configuration and the
+ * database-managed question shapes (lib/questionnaires).
  */
 export function getMaxScoresForConcentrations<C extends string>(
-  questions: readonly QuestionnaireQuestion<C, string>[],
+  questions: readonly {
+    options: readonly { weights: Partial<Record<C, number>> }[];
+  }[],
   concentrations: readonly C[],
 ): Record<C, number> {
   const totals = {} as Record<C, number>;
@@ -101,7 +107,9 @@ export function getInformationSystemsMaxScores(
  * (generic core).
  */
 export function getConcentrationCoverageForConcentrations<C extends string>(
-  questions: readonly QuestionnaireQuestion<C, string>[],
+  questions: readonly {
+    options: readonly { weights: Partial<Record<C, number>> }[];
+  }[],
   concentrations: readonly C[],
 ): Record<C, number> {
   const counts = {} as Record<C, number>;

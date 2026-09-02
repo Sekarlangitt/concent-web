@@ -5,6 +5,7 @@ import {
 import type { Major } from "@/lib/major";
 import { getInformaticsScoringConfig } from "@/lib/scoring/server/informaticsWeights";
 import { getInformationSystemsScoringConfig } from "@/lib/scoring/server/informationSystemsWeights";
+import type { ScoreQuestion, ScoreQuestionSet } from "@/lib/scoring/types";
 import {
   CONFIDENCE_HIGH_GAP,
   CONFIDENCE_MODERATE_GAP,
@@ -13,11 +14,11 @@ import { roundScore } from "@/lib/scoring/normalization";
 
 /**
  * Server-only helper: returns the authoritative weighted question set for the
- * major. The explanation measures which answer categories contributed to the
- * recommended concentration, which requires the trusted weights — never the
- * weight-free public view used by the UI.
+ * major from the LEGACY question bank. Used for pre-versioning assessments
+ * that have no questionnaireVersionId. New assessments resolve through the
+ * question set of the version they referenced instead (passed in the input).
  */
-function getScoringQuestions(major: Major) {
+function getLegacyScoringQuestions(major: Major) {
   if (major === "INFORMATICS") {
     return getInformaticsScoringConfig().questions;
   }
@@ -25,12 +26,14 @@ function getScoringQuestions(major: Major) {
 }
 
 /**
- * Deterministic recommendation explanation (STEP 8).
+ * Deterministic recommendation explanation (STEP 8, version-aware edition).
  *
  * The result page regenerates this from the STORED AssessmentAnswer rows
- * (questionId + answerKey) resolved against the trusted TypeScript question
- * configuration. It never uses sessionStorage, query parameters, or an
- * external AI service, and it never shows raw weights to students.
+ * (questionId + optionId) resolved against the trusted question set of the
+ * questionnaire version the student answered (or the legacy bank for
+ * pre-versioning assessments). It never uses sessionStorage, query
+ * parameters, or an external AI service, and it never shows raw weights to
+ * students.
  *
  * Determinism guarantees:
  *  - No randomness, timestamps, or external calls.
@@ -40,9 +43,7 @@ function getScoringQuestions(major: Major) {
  *  - the top (recommended) concentration,
  *  - the second-highest concentration and the rounded score gap,
  *  - the strongest response themes (question categories) that contributed to
- *    the recommended concentration,
- *  - contextual VR/wearable signals (only when the student's answers support
- *    them, never for every Game Development or IoT student).
+ *    the recommended concentration.
  */
 
 /** One stored AssessmentAnswer row. */
@@ -60,8 +61,14 @@ export type ExplanationInput = {
   confidenceLabel: string | null;
   /** All concentration scores for the major (any order; sorted internally). */
   scores: readonly StoredScore[];
-  /** Stored answer rows, resolved against the trusted question configuration. */
+  /** Stored answer rows, resolved against the trusted question set. */
   answers: readonly StoredAnswer[];
+  /**
+   * The trusted question set of the questionnaire version the assessment
+   * referenced. When omitted (legacy pre-versioning assessments) the legacy
+   * question bank is used instead.
+   */
+  questionSet?: ScoreQuestionSet | null;
 };
 
 export type ResultExplanation = {
@@ -107,6 +114,7 @@ const CATEGORY_THEMES: Record<string, string> = {
   // Information Systems
   analytics: "analyzing business data and finding patterns",
   "data-preparation": "cleaning and combining data for reliable analysis",
+  visualization: "turning information into clear visuals and dashboards",
   prediction: "building forecasts and predictive models",
   experimentation: "running experiments and comparing outcomes",
   "business-process": "understanding and improving business processes",
@@ -179,11 +187,13 @@ function resolveStoredAnswers(input: ExplanationInput): {
   wearableContributed: boolean;
 } {
   const recommended = input.recommendedConcentration;
-  const questions = getScoringQuestions(input.major);
+  const questions: readonly ScoreQuestion[] = input.questionSet?.questions.length
+    ? input.questionSet.questions
+    : (getLegacyScoringQuestions(input.major) as unknown as ScoreQuestion[]);
 
-  const answerKeyByQuestion = new Map<string, string>();
+  const optionIdByQuestion = new Map<string, string>();
   for (const answer of input.answers) {
-    answerKeyByQuestion.set(answer.questionId, answer.answerKey);
+    optionIdByQuestion.set(answer.questionId, answer.answerKey);
   }
 
   const categoryTotals: Record<string, number> = {};
@@ -191,27 +201,24 @@ function resolveStoredAnswers(input: ExplanationInput): {
   let wearableContributed = false;
 
   for (const question of questions) {
-    const answerKey = answerKeyByQuestion.get(question.id);
-    if (!answerKey) {
+    const optionId = optionIdByQuestion.get(question.id);
+    if (!optionId) {
       continue;
     }
-    const option = question.options.find((candidate) => candidate.id === answerKey);
+    const option = question.options.find((candidate) => candidate.id === optionId);
     if (!option) {
       continue;
     }
-    // The config types weight keys to each major's concentration subset; the
-    // recommended concentration is always valid for this major, so widening is
-    // safe here.
-    const weights = option.weights as unknown as Partial<Record<Concentration, number>>;
+    const weights = option.weights as Partial<Record<Concentration, number>>;
     const weight = weights[recommended] ?? 0;
     if (weight > 0 && question.category) {
       categoryTotals[question.category] =
         (categoryTotals[question.category] ?? 0) + weight;
     }
-    if (recommended === "GAME_DEVELOPMENT" && VR_IMMERSIVE_ANSWER_IDS.has(answerKey)) {
+    if (recommended === "GAME_DEVELOPMENT" && VR_IMMERSIVE_ANSWER_IDS.has(optionId)) {
       vrContributed = true;
     }
-    if (recommended === "IOT" && WEARABLE_MOTION_ANSWER_IDS.has(answerKey)) {
+    if (recommended === "IOT" && WEARABLE_MOTION_ANSWER_IDS.has(optionId)) {
       wearableContributed = true;
     }
   }

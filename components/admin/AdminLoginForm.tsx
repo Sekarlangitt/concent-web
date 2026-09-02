@@ -8,7 +8,7 @@ import { FormField } from "@/components/ui/FormField";
 const initialState: LoginFormState = { status: "idle" };
 
 /**
- * Admin login form (STEP 9).
+ * Admin login form.
  *
  * Submits to the loginAdmin server action via useActionState, so validation,
  * the credential check, the HttpOnly cookie, and the redirect all happen
@@ -19,20 +19,20 @@ const initialState: LoginFormState = { status: "idle" };
 export function AdminLoginForm() {
   const [state, formAction, pending] = useActionState(loginAdmin, initialState);
 
-  const emailError = state.fieldErrors?.email?.[0];
+  const usernameError = state.fieldErrors?.username?.[0];
   const passwordError = state.fieldErrors?.password?.[0];
 
   return (
     <form action={formAction} className="space-y-5">
       <FormField
-        label="Email Address"
-        name="email"
-        type="email"
-        placeholder="admin@president.ac.id"
+        label="Username"
+        name="username"
+        type="text"
+        placeholder="Enter your username"
         autoComplete="username"
         required
         disabled={pending}
-        error={emailError}
+        error={usernameError}
       />
       <FormField
         label="Password"

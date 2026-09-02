@@ -13,12 +13,22 @@ import {
 import { fullNameSchema, majorSchema } from "@/lib/validation";
 import { saveAssessmentSession } from "@/lib/assessment-session";
 import { clearCompletedAssessmentMarker } from "@/lib/completed-assessment";
+import type { StudentQuestion } from "@/lib/validation";
 
 type FormErrors = {
   fullName?: string;
   major?: string;
   form?: string;
 };
+
+type StartQuestionnaireResponse =
+  | {
+      success: true;
+      questionnaireVersionId: string;
+      versionNumber: number;
+      questions: StudentQuestion[];
+    }
+  | { success: false; error: string; message?: string };
 
 export function StudentInformationForm() {
   const router = useRouter();
@@ -32,7 +42,31 @@ export function StudentInformationForm() {
     ...MAJOR_IDS.map((id) => ({ value: id, label: MAJOR_LABELS[id] })),
   ];
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function lockQuestionnaire(name: string, selectedMajor: string) {
+    const response = await fetch("/api/questionnaire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fullName: name, major: selectedMajor }),
+    });
+    let data: StartQuestionnaireResponse | null = null;
+    try {
+      data = (await response.json()) as StartQuestionnaireResponse;
+    } catch {
+      data = null;
+    }
+    if (response.ok && data?.success) {
+      return { ok: true as const, data };
+    }
+    return {
+      ok: false as const,
+      message:
+        data && "message" in data && typeof data.message === "string"
+          ? data.message
+          : "The questionnaire for this major is temporarily unavailable. Please try again later.",
+    };
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (submitting) {
@@ -64,9 +98,22 @@ export function StudentInformationForm() {
     // so a returning student never sees "already submitted" for a previous run.
     clearCompletedAssessmentMarker();
 
+    // Lock the currently published questionnaire version for this major. The
+    // server returns the version id and the client-safe questions (never
+    // weights) which are stored in the session for the whole attempt.
+    const locked = await lockQuestionnaire(nameResult.data, majorResult.data);
+
+    if (!locked.ok) {
+      setSubmitting(false);
+      setErrors({ form: locked.message });
+      return;
+    }
+
     const saved = saveAssessmentSession({
       fullName: nameResult.data,
       major: majorResult.data,
+      questionnaireVersionId: locked.data.questionnaireVersionId,
+      questions: locked.data.questions,
       answers: {},
       currentQuestion: 0,
     });
@@ -118,7 +165,7 @@ export function StudentInformationForm() {
       />
 
       {errors.form ? (
-        <p role="alert" className="text-sm font-medium text-accent-700">
+        <p role="alert" className="rounded-lg border border-accent-200 bg-accent-50 px-4 py-3 text-sm font-medium text-accent-800">
           {errors.form}
         </p>
       ) : null}
@@ -129,7 +176,7 @@ export function StudentInformationForm() {
         className="w-full"
         disabled={submitting}
       >
-        Start Assessment
+        {submitting ? "Preparing your assessment…" : "Start Assessment"}
       </Button>
     </form>
   );

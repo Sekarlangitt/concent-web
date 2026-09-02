@@ -12,18 +12,18 @@ import {
 import { adminLoginSchema } from "@/lib/validation/admin-login";
 
 /**
- * Server Action for admin login (STEP 9).
+ * Server Action for admin login.
  *
  * Flow:
- *   1. Zod-validate email + password (never trust the browser).
+ *   1. Zod-validate username + password (never trust the browser).
  *   2. Best-effort per-process rate limit on repeated failures.
  *   3. Server-side credential check (Prisma + bcrypt.compare).
  *   4. Create the signed HttpOnly session cookie.
  *   5. Redirect to the protected dashboard.
  *
  * Credentials never appear in URLs, query strings, or client state. Error
- * messages are deliberately generic — "Invalid email or password." does not
- * reveal whether the email or the password was the problem, and unexpected
+ * messages are deliberately generic — "Invalid username or password." does not
+ * reveal whether the username or the password was the problem, and unexpected
  * failures show a friendly message while the real error is logged server-side.
  */
 
@@ -39,34 +39,34 @@ export async function loginAdmin(
   _prevState: LoginFormState,
   formData: FormData,
 ): Promise<LoginFormState> {
-  const emailInput = formData.get("email");
+  const usernameInput = formData.get("username");
   const passwordInput = formData.get("password");
 
   const parsed = adminLoginSchema.safeParse({
-    email: typeof emailInput === "string" ? emailInput : "",
+    username: typeof usernameInput === "string" ? usernameInput : "",
     password: typeof passwordInput === "string" ? passwordInput : "",
   });
 
   if (!parsed.success) {
     return {
       status: "error",
-      message: "Please check your email and password.",
+      message: "Please check your username and password.",
       fieldErrors: parsed.error.flatten().fieldErrors,
     };
   }
 
-  const { email, password } = parsed.data;
+  const { username, password } = parsed.data;
 
-  if (isLoginRateLimited(email)) {
+  if (isLoginRateLimited(username)) {
     return {
       status: "error",
       message: "Too many sign-in attempts. Please wait a few minutes and try again.",
     };
   }
 
-  let admin: { id: string; email: string } | null = null;
+  let admin: { id: string; username: string; email: string } | null = null;
   try {
-    admin = await verifyAdminCredentials(email, password);
+    admin = await verifyAdminCredentials(username, password);
   } catch (error) {
     // Log technical details for development only — the admin never sees them.
     console.error("[admin/login] credential verification failed:", error);
@@ -77,8 +77,8 @@ export async function loginAdmin(
   }
 
   if (!admin) {
-    recordLoginFailure(email);
-    return { status: "error", message: "Invalid email or password." };
+    recordLoginFailure(username);
+    return { status: "error", message: "Invalid username or password." };
   }
 
   try {
@@ -91,7 +91,7 @@ export async function loginAdmin(
     };
   }
 
-  clearLoginRateLimit(email);
+  clearLoginRateLimit(username);
 
   // Called after the cookie is reliably set; navigates on the client (or 303
   // redirects for non-JS submissions). Outside any try/catch by design.

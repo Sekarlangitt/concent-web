@@ -34,7 +34,11 @@ import { signSessionToken } from "@/lib/auth/session-token";
  */
 
 const SECRET = "unit-test-secret-0123456789-abcdefghijklmnop";
-const ADMIN = { adminId: "cm_123", email: "admin@president.ac.id" };
+const ADMIN = {
+  adminId: "cm_123",
+  username: "admin",
+  email: "admin@president.ac.id",
+};
 
 describe("admin session cookie", () => {
   beforeEach(() => {
@@ -85,7 +89,7 @@ describe("admin session cookie", () => {
   });
 
   it("sets an HttpOnly, SameSite=Lax, path=/ cookie with a maxAge", async () => {
-    await createAdminSession({ id: ADMIN.adminId, email: ADMIN.email });
+    await createAdminSession({ id: ADMIN.adminId, username: ADMIN.username, email: ADMIN.email });
 
     expect(cookieSet).toHaveBeenCalledTimes(1);
     const [name, value, options] = cookieSet.mock.calls[0];
@@ -107,7 +111,7 @@ describe("admin session cookie", () => {
     const mutableEnv = process.env as Record<string, string | undefined>;
     mutableEnv.NODE_ENV = "production";
     try {
-      await createAdminSession({ id: ADMIN.adminId, email: ADMIN.email });
+      await createAdminSession({ id: ADMIN.adminId, username: ADMIN.username, email: ADMIN.email });
       const [, , options] = cookieSet.mock.calls[0];
       expect(options.secure).toBe(true);
     } finally {

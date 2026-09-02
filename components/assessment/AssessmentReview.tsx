@@ -11,7 +11,6 @@ import {
   getAnswerLabel,
   getFirstIncompleteIndex,
   getIncompleteQuestions,
-  getQuestionsForMajor,
   getValidAnswersForMajor,
 } from "@/lib/questionnaire";
 import {
@@ -55,7 +54,9 @@ const SUBMITTING_LABEL = "Calculating your recommendation…";
 export function AssessmentReview({ session }: { session: AssessmentSession }) {
   const router = useRouter();
 
-  const questions = getQuestionsForMajor(session.major);
+  // Questions come from the locked questionnaire version stored in the
+  // session. A legacy session without them cannot be submitted.
+  const questions = session.questions ?? [];
   const answers = session.answers ?? {};
   const total = questions.length;
   const answeredCount = getAnsweredCount(questions, answers);
@@ -106,11 +107,19 @@ export function AssessmentReview({ session }: { session: AssessmentSession }) {
     setSubmitError(null);
 
     try {
-      // Only valid answers for this major are sent; the server re-validates
-      // everything anyway.
+      if (!session.questionnaireVersionId) {
+        throw new AssessmentSubmitError(
+          "validation",
+          "This assessment is missing its questionnaire version. Please start a new assessment.",
+          400,
+        );
+      }
+      // Only valid answers for this version are sent; the server re-validates
+      // everything against the locked questionnaire version anyway.
       const payload = {
         fullName: session.fullName,
         major: session.major,
+        questionnaireVersionId: session.questionnaireVersionId,
         answers: getValidAnswersForMajor(questions, answers),
       };
       const response = await submitAssessment(payload);

@@ -1,36 +1,59 @@
 import {
   getPublicQuestionsForMajor,
-  type PublicQuestion,
 } from "@/data/publicQuestions";
+import type { QuestionType } from "@/data/questionTypes";
 import type { Major } from "@/lib/major";
 
 /**
  * Major-based questionnaire selection (STEP 5, hardened in STEP 12).
  *
  * The student picks only a major; the concentration is inferred later from
- * their answers. This module is the single source of truth for which 20-question
- * set belongs to which major, so the questionnaire UI, review screen, and
- * result helpers never duplicate that mapping.
+ * their answers.
  *
- * SECURITY (STEP 12): this module is client-safe. It exposes ONLY the public
- * question metadata (IDs, text, type, category, option IDs/labels) from
- * data/publicQuestions.ts. Scoring weights live in the server-only modules
- * data/informaticsQuestions.ts, data/informationSystemsQuestions.ts, and
- * lib/scoring/server/*Weights.ts and are never reachable from here.
+ * ARCHITECTURE NOTE (database-managed questionnaires): the production student
+ * flow no longer uses this module to CHOOSE questions — the server locks the
+ * currently published QuestionnaireVersion and the client renders the
+ * questions stored in the assessment session. This module keeps:
+ *
+ *  - the pure question-set helpers (answer validation, completeness, index
+ *    clamping) that operate on ANY question shape, including the DB-backed
+ *    student questions in the session, and
+ *  - `getQuestionsForMajor` as a LEGACY resolver (the pre-database question
+ *    bank) used to backfill and display historical assessments that predate
+ *    questionnaire versioning.
+ *
+ * SECURITY: the legacy public metadata contains no weights. DB-backed student
+ * questions are serialized by the server without weights. Scoring weights are
+ * never reachable from this module.
  */
 
-/** Every public question in the application, across both majors. */
-export type AnyQuestion = PublicQuestion;
+/** One answer option in any client-renderable question (no weights). */
+export type AnyQuestionOption = {
+  id: string;
+  label: string;
+};
 
 /**
- * Returns the 20-question questionnaire for the student's major.
- *
- *   INFORMATICS         → INF_Q01 … INF_Q20
- *   INFORMATION_SYSTEMS → IS_Q01 … IS_Q20
+ * A structural question type shared by legacy public questions and DB-backed
+ * student questions. `major` is present on legacy questions only; helpers
+ * never rely on it.
+ */
+export type AnyQuestion = {
+  id: string;
+  type: QuestionType;
+  text: string;
+  category?: string;
+  major?: Major;
+  options: readonly AnyQuestionOption[];
+};
+
+/**
+ * LEGACY: returns the 20-question questionnaire for the student's major from
+ * the pre-database question bank. Used only to resolve historical assessments
+ * created before questionnaire versioning. The production student flow reads
+ * the published version from the database instead.
  *
  * Fails safely: an unexpected major yields an empty array instead of crashing.
- * In practice the assessment session is zod-validated against the two official
- * major enum values, so the empty branch is unreachable in normal flows.
  */
 export function getQuestionsForMajor(major: Major): readonly AnyQuestion[] {
   return getPublicQuestionsForMajor(major);
@@ -39,7 +62,7 @@ export function getQuestionsForMajor(major: Major): readonly AnyQuestion[] {
 /**
  * Whether an option ID belongs to the given question (i.e. it is one of the
  * question's own option IDs). Used to reject malformed, invented, or
- * cross-major answer values.
+ * cross-version answer values.
  */
 export function isOptionIdForQuestion(
   question: AnyQuestion,
@@ -51,8 +74,7 @@ export function isOptionIdForQuestion(
 /**
  * Resolves the human-readable label for the answer a student stored for a
  * question. Returns null when the question has no stored answer or the stored
- * option ID does not belong to the question (invalid/invented/cross-major).
- * The review screen uses this so it can never display an internal option ID.
+ * option ID does not belong to the question (invalid/invented).
  */
 export function getAnswerLabel(
   question: AnyQuestion,
@@ -70,8 +92,7 @@ export function getAnswerLabel(
 
 /**
  * Whether a question has a valid stored answer. This is the single rule the
- * questionnaire flow uses to decide whether the student may move forward
- * (Next / Review Answers / Save & Return to Review).
+ * questionnaire flow uses to decide whether the student may move forward.
  */
 export function isQuestionAnswered(
   question: AnyQuestion,

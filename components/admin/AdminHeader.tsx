@@ -5,17 +5,18 @@ import { LogoutButton } from "@/components/admin/LogoutButton";
 import {
   ADMIN_ASSESSMENTS_ROUTE,
   ADMIN_DASHBOARD_ROUTE,
+  ADMIN_QUESTIONS_ROUTE,
 } from "@/lib/auth/config";
 import type { CurrentAdmin } from "@/lib/auth/admin";
 
 /**
- * Admin header for the protected area (STEP 10, STEP 11 nav update).
+ * Admin header for the protected area.
  *
  * Shows the President University logo, the admin section title, the signed-in
- * admin email, and the admin navigation (Dashboard, Assessments, and Logout).
- * The active route is highlighted via AdminNavLink. Only the admin email is
- * exposed — never the internal admin id or the password hash. No dead links:
- * the Assessments link is live now that /admin/assessments exists.
+ * admin username, and the admin navigation (Dashboard, Assessments,
+ * Questions, and Logout). The active route is highlighted via AdminNavLink.
+ * Only the admin username and email are exposed — never the internal admin id
+ * or the password hash.
  */
 export function AdminHeader({ admin }: { admin: CurrentAdmin }) {
   return (
@@ -33,8 +34,8 @@ export function AdminHeader({ admin }: { admin: CurrentAdmin }) {
             <p className="truncate text-sm font-semibold leading-tight sm:text-base">
               Concentration Recommendation Admin
             </p>
-            <p className="truncate text-xs text-brand-200" data-testid="admin-header-email">
-              Signed in as {admin.email}
+            <p className="truncate text-xs text-brand-200" data-testid="admin-header-username">
+              Signed in as {admin.username}
             </p>
           </div>
         </div>
@@ -45,6 +46,7 @@ export function AdminHeader({ admin }: { admin: CurrentAdmin }) {
         >
           <AdminNavLink href={ADMIN_DASHBOARD_ROUTE}>Dashboard</AdminNavLink>
           <AdminNavLink href={ADMIN_ASSESSMENTS_ROUTE}>Assessments</AdminNavLink>
+          <AdminNavLink href={ADMIN_QUESTIONS_ROUTE}>Questions</AdminNavLink>
           <LogoutButton />
         </nav>
       </div>

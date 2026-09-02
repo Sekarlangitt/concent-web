@@ -4,20 +4,33 @@ import {
   scoreAssessment,
 } from "@/lib/scoring/score-assessment";
 import { assessmentSubmissionSchema } from "@/lib/validation/assessment-submission";
+import {
+  VERSION_INCLUDE,
+  mapVersionRecordToShape,
+} from "@/lib/questionnaires/load-version";
+import {
+  buildAnswerSnapshots,
+  toScoreQuestionSet,
+} from "@/lib/questionnaires/scoring";
 import type { Major } from "@/lib/major";
 
 /**
- * POST /api/assessments — authoritative assessment submission (STEP 7).
+ * POST /api/assessments — authoritative assessment submission (STEP 7,
+ * database-questionnaire edition).
  *
  * Flow:
- *   1. Zod-validate the small payload (fullName, major, answers).
- *   2. scoreAssessment() validates every answer against the trusted question
- *      configuration and computes raw → maximum → normalized → ranking →
- *      recommendation → confidence purely server-side.
- *   3. A Prisma transaction atomically creates the Assessment record, its 20
- *      AssessmentAnswer rows, and its ConcentrationScore rows (6 for
- *      Informatics, 2 for Information Systems).
- *   4. A time-windowed duplicate check protects against accidental repeat
+ *   1. Zod-validate the small payload (fullName, major,
+ *      questionnaireVersionId, answers).
+ *   2. Load the questionnaire version the student was locked to (including
+ *      its database questions/options/weights) and verify it exists, belongs
+ *      to the submitted major, and is PUBLISHED or ARCHIVED.
+ *   3. scoreAssessment() validates every answer against that trusted version
+ *      and computes raw → maximum → normalized → ranking → recommendation →
+ *      confidence purely server-side using database weights.
+ *   4. A Prisma transaction atomically creates the Assessment record (with
+ *      questionnaireVersionId), its 20 AssessmentAnswer rows (with historical
+ *      question/answer snapshots), and its ConcentrationScore rows.
+ *   5. A time-windowed duplicate check protects against accidental repeat
  *      submissions (in addition to the client's in-flight guard).
  *
  * Status codes:
@@ -34,17 +47,15 @@ const DUPLICATE_WINDOW_MS = 15 * 60 * 1000;
 type DuplicateLookupInput = {
   fullName: string;
   major: Major;
+  questionnaireVersionId: string;
   answers: Record<string, string>;
 };
 
 /**
  * Best-effort server-side duplicate guard: finds a recently completed
- * assessment for the same student name and major whose 20 stored answers are
- * byte-identical to this submission. Returns its id, or null.
- *
- * This is intentionally not a distributed idempotency system — the primary
- * protection is the client's in-flight lock and completion marker, so a
- * simple time window is sufficient here.
+ * assessment for the same student name, major, and questionnaire version
+ * whose stored answers are byte-identical to this submission. Returns its id,
+ * or null.
  */
 async function findDuplicateAssessmentId(
   tx: Pick<typeof prisma, "assessment">,
@@ -55,6 +66,7 @@ async function findDuplicateAssessmentId(
     where: {
       fullName: input.fullName,
       major: input.major,
+      questionnaireVersionId: input.questionnaireVersionId,
       createdAt: { gte: since },
     },
     select: {
@@ -117,11 +129,41 @@ export async function POST(request: Request) {
     );
   }
 
-  const { fullName, major, answers } = parsed.data;
+  const { fullName, major, questionnaireVersionId, answers } = parsed.data;
+
+  // Load the version the student was locked to (PUBLISHED or ARCHIVED). An
+  // archived version remains valid for in-flight/historical assessments.
+  const versionRecord = await prisma.questionnaireVersion.findUnique({
+    where: { id: questionnaireVersionId },
+    include: VERSION_INCLUDE,
+  });
+
+  if (
+    !versionRecord ||
+    versionRecord.major !== major ||
+    (versionRecord.status !== "PUBLISHED" &&
+      versionRecord.status !== "ARCHIVED")
+  ) {
+    return jsonResponse(
+      {
+        success: false,
+        error: "validation",
+        message:
+          "The questionnaire for this assessment is no longer available. Please start a new assessment.",
+      },
+      400,
+    );
+  }
+
+  const version = mapVersionRecordToShape(versionRecord);
 
   let scored;
   try {
-    scored = scoreAssessment({ major, answers });
+    scored = scoreAssessment({
+      major,
+      answers,
+      questionSet: toScoreQuestionSet(version),
+    });
   } catch (error) {
     if (error instanceof AssessmentSubmissionError) {
       return jsonResponse(
@@ -132,45 +174,58 @@ export async function POST(request: Request) {
     throw error;
   }
 
-  try {
-    const result = await prisma.$transaction(async (tx) => {
-      const duplicateAssessmentId = await findDuplicateAssessmentId(tx, {
-        fullName,
-        major,
-        answers,
-      });
-      if (duplicateAssessmentId) {
-        return { assessmentId: duplicateAssessmentId, duplicate: true as const };
-      }
+  const snapshots = buildAnswerSnapshots(version, scored);
 
-      const assessment = await tx.assessment.create({
-        data: {
+  try {
+    const result = await prisma.$transaction(
+      async (tx) => {
+        const duplicateAssessmentId = await findDuplicateAssessmentId(tx, {
           fullName,
           major,
-          recommendedConcentration: scored.recommendedConcentration,
-          recommendedScore: scored.recommendedScore,
-          confidenceLabel: scored.confidenceLabel,
-          completedAt: new Date(),
-          answers: {
-            create: scored.answers.map((answer) => ({
-              questionId: answer.questionId,
-              answerKey: answer.answerKey,
-              numericValue: answer.numericValue,
-            })),
-          },
-          concentrationScores: {
-            create: scored.scores.map((score) => ({
-              concentration: score.concentration,
-              rawScore: score.rawScore,
-              normalizedScore: score.normalizedScore,
-            })),
-          },
-        },
-        select: { id: true },
-      });
+          questionnaireVersionId,
+          answers,
+        });
+        if (duplicateAssessmentId) {
+          return { assessmentId: duplicateAssessmentId, duplicate: true as const };
+        }
 
-      return { assessmentId: assessment.id, duplicate: false as const };
-    });
+        const assessment = await tx.assessment.create({
+          data: {
+            fullName,
+            major,
+            questionnaireVersionId,
+            recommendedConcentration: scored.recommendedConcentration,
+            recommendedScore: scored.recommendedScore,
+            confidenceLabel: scored.confidenceLabel,
+            completedAt: new Date(),
+            answers: {
+              create: scored.answers.map((answer, index) => {
+                const snapshot = snapshots[index];
+                return {
+                  questionId: answer.questionId,
+                  answerKey: answer.answerKey,
+                  optionId: answer.answerKey,
+                  numericValue: answer.numericValue,
+                  questionSnapshot: snapshot.questionSnapshot,
+                  answerSnapshot: snapshot.answerSnapshot,
+                };
+              }),
+            },
+            concentrationScores: {
+              create: scored.scores.map((score) => ({
+                concentration: score.concentration,
+                rawScore: score.rawScore,
+                normalizedScore: score.normalizedScore,
+              })),
+            },
+          },
+          select: { id: true },
+        });
+
+        return { assessmentId: assessment.id, duplicate: false as const };
+      },
+      { timeout: 60_000 },
+    );
 
     return jsonResponse(
       {
@@ -197,3 +252,4 @@ export async function POST(request: Request) {
     );
   }
 }
+

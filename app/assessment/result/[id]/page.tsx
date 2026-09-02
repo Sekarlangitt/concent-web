@@ -14,6 +14,10 @@ import { prisma } from "@/lib/prisma";
 import { generateResultExplanation } from "@/lib/results/generate-explanation";
 import { formatSuitabilityScore } from "@/lib/results/format-score";
 import { validateStoredResult } from "@/lib/results/result-utils";
+import {
+  mapVersionRecordToShape,
+} from "@/lib/questionnaires/load-version";
+import { toScoreQuestionSet } from "@/lib/questionnaires/scoring";
 
 export const metadata: Metadata = {
   title: "Concentration Recommendation | President University",
@@ -49,6 +53,19 @@ export default async function AssessmentResultPage({
       include: {
         concentrationScores: true,
         answers: true,
+        questionnaireVersion: {
+          include: {
+            questions: {
+              orderBy: { order: "asc" },
+              include: {
+                options: {
+                  orderBy: { order: "asc" },
+                  include: { weights: true },
+                },
+              },
+            },
+          },
+        },
       },
     });
   } catch (error) {
@@ -115,6 +132,9 @@ export default async function AssessmentResultPage({
       questionId: answer.questionId,
       answerKey: answer.answerKey,
     })),
+    questionSet: assessment.questionnaireVersion
+      ? toScoreQuestionSet(mapVersionRecordToShape(assessment.questionnaireVersion))
+      : null,
   });
 
   const completedDate = new Intl.DateTimeFormat("en", {

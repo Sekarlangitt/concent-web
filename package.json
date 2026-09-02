@@ -14,6 +14,8 @@
     "db:studio": "prisma studio",
     "db:validate": "prisma validate",
     "db:seed": "prisma db seed",
+    "db:seed:questionnaires": "tsx prisma/seed-questionnaires.ts",
+    "db:backfill": "tsx prisma/backfill-snapshots.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

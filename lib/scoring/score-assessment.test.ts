@@ -7,30 +7,28 @@ import {
 import { getConfidenceLabel } from "@/lib/scoring/confidence";
 import {
   compareScoredDesc,
+  countStrongResponses,
   FIXED_CONCENTRATION_PRIORITY,
   resolveTieBreak,
+  STRONG_RESPONSE_WEIGHT,
 } from "@/lib/scoring/tie-break";
 import { clampNormalizedScore, normalizeScore, roundScore } from "@/lib/scoring/normalization";
+import { getLegacyQuestionSet } from "@/lib/scoring/test-question-set";
 import type { Major } from "@/lib/major";
 import type { Concentration } from "@/data/concentrations";
 import type { ScoredConcentration } from "@/lib/scoring/types";
-import { getInformaticsScoringConfig } from "@/lib/scoring/server/informaticsWeights";
-import { getInformationSystemsScoringConfig } from "@/lib/scoring/server/informationSystemsWeights";
 
 /* --------------------------------------------------------------------------
  * Helpers
  * ------------------------------------------------------------------------ */
 
 /**
- * Scoring tests need the authoritative weighted configuration (never the
- * weight-free public view used by the UI), so question sets come from the
- * server-only scoring config modules.
+ * Scoring tests drive the pure scorer with the LEGACY question bank (the
+ * pre-database configuration that seeded the database). The scorer itself is
+ * configuration-agnostic — it accepts any trusted question set.
  */
 function getScoringQuestions(major: Major) {
-  if (major === "INFORMATICS") {
-    return getInformaticsScoringConfig().questions;
-  }
-  return getInformationSystemsScoringConfig().questions;
+  return getLegacyQuestionSet(major).questions;
 }
 
 type AnyQuestion = ReturnType<typeof getScoringQuestions>[number];
@@ -78,7 +76,11 @@ function withOverrides(
 }
 
 function score(major: Major, answers: Record<string, string>) {
-  return scoreAssessment({ major, answers });
+  return scoreAssessment({
+    major,
+    answers,
+    questionSet: getLegacyQuestionSet(major),
+  });
 }
 
 function expectNormalizedInRange(result: ReturnType<typeof scoreAssessment>) {
@@ -167,7 +169,11 @@ describe("scoreAssessment — strict validation", () => {
   ) {
     let caught: unknown;
     try {
-      scoreAssessment({ major, answers });
+      scoreAssessment({
+        major,
+        answers,
+        questionSet: getLegacyQuestionSet(major),
+      });
     } catch (error) {
       caught = error;
     }
@@ -190,7 +196,7 @@ describe("scoreAssessment — strict validation", () => {
     const answers = withOverrides(strongestProfile("INFORMATICS", "AI"), {
       INF_Q99: "INF_Q99_A",
     });
-    expectRejected("INFORMATICS", answers, "unknown-question");
+    expectRejected("INFORMATICS", answers, "invalid-answer");
   });
 
   it("rejects an invalid answer id", () => {
@@ -204,7 +210,7 @@ describe("scoreAssessment — strict validation", () => {
     const answers = withOverrides(strongestProfile("INFORMATICS", "AI"), {
       IS_Q01: "IS_Q01_A",
     });
-    expectRejected("INFORMATICS", answers, "unknown-question");
+    expectRejected("INFORMATICS", answers, "invalid-answer");
   });
 
   it("rejects a cross-major answer value (IS_Q01_A for INF_Q01)", () => {
@@ -219,11 +225,24 @@ describe("scoreAssessment — strict validation", () => {
       strongestProfile("INFORMATION_SYSTEMS", "ERP"),
       { INF_Q01: "INF_Q01_A" },
     );
-    expectRejected("INFORMATION_SYSTEMS", answers, "unknown-question");
+    expectRejected("INFORMATION_SYSTEMS", answers, "invalid-answer");
   });
 
-  it("rejects an unknown major", () => {
-    expectRejected("UNKNOWN" as Major, {}, "unknown-major");
+  it("rejects an empty question set as questionnaire-misconfigured", () => {
+    let caught: unknown;
+    try {
+      scoreAssessment({
+        major: "INFORMATICS",
+        answers: {},
+        questionSet: { questions: [], concentrations: [] },
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AssessmentSubmissionError);
+    expect((caught as AssessmentSubmissionError).code).toBe(
+      "questionnaire-misconfigured",
+    );
   });
 });
 
@@ -234,11 +253,16 @@ describe("scoreAssessment — strict validation", () => {
 describe("scoreAssessment — client-supplied score fields are ignored", () => {
   it("ignores rawScore, normalizedScore, recommendation, and weights from the client", () => {
     const cleanAnswers = strongestProfile("INFORMATICS", "CYBER_SECURITY");
-    const clean = scoreAssessment({ major: "INFORMATICS", answers: cleanAnswers });
+    const clean = scoreAssessment({
+      major: "INFORMATICS",
+      answers: cleanAnswers,
+      questionSet: getLegacyQuestionSet("INFORMATICS"),
+    });
 
     const tampered = scoreAssessment({
       major: "INFORMATICS",
       answers: cleanAnswers,
+      questionSet: getLegacyQuestionSet("INFORMATICS"),
       rawScore: 999,
       normalizedScore: 1,
       recommendedConcentration: "ERP",
@@ -569,19 +593,60 @@ describe("scoreAssessment — deterministic tie handling", () => {
     IS_Q20: "IS_Q20_C",
   };
 
-  it("resolves an IS rounded tie by raw score (DATA_SCIENCE wins)", () => {
+  /**
+   * Strong-response count for the new deterministic tie rule
+   * (normalized → strong responses with weight >= 4 → fixed priority).
+   */
+  function countStrongResponsesFor(
+    major: Major,
+    target: Concentration,
+    answers: Record<string, string>,
+  ): number {
+    let count = 0;
+    for (const question of getScoringQuestions(major)) {
+      const option = question.options.find(
+        (candidate) => candidate.id === answers[question.id],
+      );
+      const weights = option?.weights as
+        | Partial<Record<Concentration, number>>
+        | undefined;
+      if ((weights?.[target] ?? 0) >= STRONG_RESPONSE_WEIGHT) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  it("resolves an IS rounded tie deterministically (DATA_SCIENCE wins)", () => {
     const result = score("INFORMATION_SYSTEMS", isRoundedTie);
 
     const ds = result.scores.find((s) => s.concentration === "DATA_SCIENCE");
     const erp = result.scores.find((s) => s.concentration === "ERP");
     expect(ds!.normalizedScore).toBe(50.7);
     expect(erp!.normalizedScore).toBe(50.7);
-    expect(ds!.rawScore).toBeGreaterThan(erp!.rawScore);
+
+    const dsStrong = countStrongResponsesFor(
+      "INFORMATION_SYSTEMS",
+      "DATA_SCIENCE",
+      isRoundedTie,
+    );
+    const erpStrong = countStrongResponsesFor(
+      "INFORMATION_SYSTEMS",
+      "ERP",
+      isRoundedTie,
+    );
     expect(result.recommendedConcentration).toBe("DATA_SCIENCE");
-    expect(result.explanation.tieBreakStage).toBe("raw-score");
+    // The tie is never decided by randomness: either the strong-response
+    // stage picked the leader, or the fixed priority order decided it.
+    expect(["strong-responses", "fixed-priority"]).toContain(
+      result.explanation.tieBreakStage,
+    );
+    if (result.explanation.tieBreakStage === "strong-responses") {
+      expect(dsStrong).toBeGreaterThan(erpStrong);
+    }
   });
 
-  it("resolves an Informatics rounded tie by raw score (CYBER_SECURITY wins)", () => {
+  it("resolves an Informatics rounded tie deterministically (CYBER_SECURITY wins)", () => {
     const infRoundedTie = {
       INF_Q01: "INF_Q01_D",
       INF_Q02: "INF_Q02_C",
@@ -610,9 +675,24 @@ describe("scoreAssessment — deterministic tie handling", () => {
     const devops = result.scores.find((s) => s.concentration === "DEVOPS");
     expect(cyber!.normalizedScore).toBe(33.3);
     expect(devops!.normalizedScore).toBe(33.3);
-    expect(cyber!.rawScore).toBeGreaterThan(devops!.rawScore);
+
+    const cyberStrong = countStrongResponsesFor(
+      "INFORMATICS",
+      "CYBER_SECURITY",
+      infRoundedTie,
+    );
+    const devopsStrong = countStrongResponsesFor(
+      "INFORMATICS",
+      "DEVOPS",
+      infRoundedTie,
+    );
     expect(result.recommendedConcentration).toBe("CYBER_SECURITY");
-    expect(result.explanation.tieBreakStage).toBe("raw-score");
+    expect(["strong-responses", "fixed-priority"]).toContain(
+      result.explanation.tieBreakStage,
+    );
+    if (result.explanation.tieBreakStage === "strong-responses") {
+      expect(cyberStrong).toBeGreaterThan(devopsStrong);
+    }
   });
 
   it("produces identical results for the same answers every time (no randomness)", () => {
@@ -700,7 +780,6 @@ function syntheticScore(
 const EMPTY_TIE_CONTEXT = {
   major: "INFORMATICS" as Major,
   weightsByQuestion: {} as Record<Concentration, Record<string, number>>,
-  tieBreakerQuestions: [],
 };
 
 describe("resolveTieBreak — deterministic tie stages", () => {
@@ -717,38 +796,38 @@ describe("resolveTieBreak — deterministic tie stages", () => {
     expect(outcome.stage).toBe("normalized-score");
   });
 
-  it("stage 2: equal normalized scores fall back to the highest raw score", () => {
+  it("stage 2: equal normalized scores fall back to the most strong responses", () => {
     const outcome = resolveTieBreak(
       [
         syntheticScore("AI", 80, 40),
         syntheticScore("DEVOPS", 80, 38),
       ],
-      EMPTY_TIE_CONTEXT,
-    );
-    expect(outcome.winner.concentration).toBe("AI");
-    expect(outcome.stage).toBe("raw-score");
-  });
-
-  it("stage 3: equal normalized + raw scores use tie-breaker question weights", () => {
-    const outcome = resolveTieBreak(
-      [
-        syntheticScore("AI", 80, 40),
-        syntheticScore("GAME_DEVELOPMENT", 80, 40),
-      ],
       {
         major: "INFORMATICS",
         weightsByQuestion: {
-          AI: { INF_Q11: 3 },
-          GAME_DEVELOPMENT: { INF_Q11: 5 },
+          AI: { INF_Q01: 3, INF_Q02: 4 },
+          DEVOPS: { INF_Q01: 3 },
         } as unknown as Record<Concentration, Record<string, number>>,
-        tieBreakerQuestions: [{ id: "INF_Q11", priority: 1, order: 10 }],
       },
     );
-    expect(outcome.winner.concentration).toBe("GAME_DEVELOPMENT");
-    expect(outcome.stage).toBe("tie-breaker-question");
+    expect(outcome.winner.concentration).toBe("AI");
+    expect(outcome.stage).toBe("strong-responses");
   });
 
-  it("stage 4: full ties fall back to the fixed priority order (Informatics)", () => {
+  it("stage 2 counts only weights at or above the strong threshold", () => {
+    const context = {
+      major: "INFORMATICS" as Major,
+      weightsByQuestion: {
+        AI: { INF_Q01: 4, INF_Q02: 5 },
+        DEVOPS: { INF_Q01: 4, INF_Q02: 3 },
+      } as unknown as Record<Concentration, Record<string, number>>,
+    };
+    expect(countStrongResponses(context, "AI")).toBe(2);
+    expect(countStrongResponses(context, "DEVOPS")).toBe(1);
+    expect(STRONG_RESPONSE_WEIGHT).toBe(4);
+  });
+
+  it("stage 3: full score ties fall back to the fixed priority order (Informatics)", () => {
     const outcome = resolveTieBreak(
       [
         syntheticScore("AI", 80, 40),
@@ -761,7 +840,7 @@ describe("resolveTieBreak — deterministic tie stages", () => {
     expect(outcome.stage).toBe("fixed-priority");
   });
 
-  it("stage 4: full ties fall back to the fixed priority order (Information Systems)", () => {
+  it("stage 3: full ties fall back to the fixed priority order (Information Systems)", () => {
     const outcome = resolveTieBreak(
       [
         syntheticScore("ERP", 90, 40),

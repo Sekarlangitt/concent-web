@@ -30,39 +30,87 @@ and/or IoT as designed.
 
 ## Questionnaire structure
 
-- The questionnaire has **40 questions total**.
-- **Informatics:** 20 questions (`INF_Q01` … `INF_Q20`).
-- **Information Systems:** 20 questions (`IS_Q01` … `IS_Q20`).
-- A student answers **exactly the 20 questions of their selected major** —
-  never all 40, and never a mixed set.
+The questionnaire is **database-managed and versioned** (PostgreSQL via Prisma).
+The database is the single source of truth for question texts, answer options,
+and scoring weights — there is no competing TypeScript question bank at
+runtime.
 
-Students only select their **major**; the concentration is never picked
-directly. It is inferred from their answers by the server-side scoring engine.
+- **40 questions across two published questionnaires:** Informatics (20) and
+  Information Systems (20). Each student answers **exactly the 20 questions of
+  their selected major** — never all 40, never a mixed set.
+- Every question belongs to exactly one **QuestionnaireVersion**. A version
+  has one of three statuses: `DRAFT`, `PUBLISHED`, or `ARCHIVED`. Each major
+  has at most **one** published version at a time.
+- Students only select their **major**; the concentration is never picked
+  directly. It is inferred from their answers by the server-side scoring
+  engine using the database weights of the locked version.
+
+### Questionnaire versioning
+
+Versioning protects historical integrity:
+
+1. The initial seed creates **Version 1 (PUBLISHED)** for each major.
+2. Admins never edit a published version. To make changes they click
+   **Create Draft From Published**, which copies the published questions,
+   options, and weights into a new `DRAFT` version.
+3. The draft is edited, validated, previewed, and **published** atomically:
+   the previous published version becomes `ARCHIVED` and the draft becomes
+   `PUBLISHED`.
+4. A student who starts an assessment is **locked to the version that is
+   published at that moment** — even if the admin publishes a newer version
+   mid-attempt, the student keeps answering and submitting against their
+   original version. Archived versions therefore stay queryable forever.
+
+### Exactly-20 rule and publish validation
+
+A draft can only be published when it passes server-side validation:
+
+- exactly 20 questions, with deterministic gap-free ordering;
+- every question has non-empty text, a supported type, and at least 2 answer
+  options with non-empty labels;
+- every weight is an integer in **0–5** and only targets concentrations
+  belonging to the questionnaire's major (rejects cross-major combinations);
+- every concentration has a **theoretical maximum score > 0** (it can actually
+  receive points somewhere in the questionnaire).
+
+The admin validation panel shows the question count, per-concentration
+coverage and theoretical maxima, and any blocking errors. Reasonable maximum
+spreads produce a warning, never a block (normalization compensates).
+
+### Historical snapshots
+
+On submission the server stores, for each answer, the **question text and
+answer label at that time** (`questionSnapshot` / `answerSnapshot`), plus the
+`questionnaireVersionId`. Legacy assessments created before versioning were
+backfilled with snapshots from the old question bank, so historical records
+remain readable even after questionnaires evolve.
 
 ## Scoring model
 
 - Scoring is **server-side and authoritative**. The browser submits only
-  `{ fullName, major, answers }` — stable question/option IDs. Raw scores,
-  normalized scores, the recommendation, and the confidence label are always
-  computed by `lib/scoring/score-assessment.ts`, never accepted from the
-  client.
+  `{ fullName, major, questionnaireVersionId, answers }` — question/option IDs.
+  The server loads the locked version's questions, options, and **database
+  weights**, then computes raw scores, normalized scores, the recommendation,
+  and the confidence label in `lib/scoring/score-assessment.ts`. Nothing
+  scoring-related is ever accepted from the client.
+- Weights are hidden from students: the questionnaire API and session store
+  only question IDs, text, types, and option IDs/labels.
 - Each concentration is normalized **independently**:
 
   ```text
   normalizedScore = (rawScore / theoreticalMaximumForThatConcentration) * 100
   ```
 
-  The theoretical maximum is derived from the trusted weight configuration
-  (never a global maximum and never a question count).
+  The theoretical maximum is derived from the database weights of the locked
+  version (highest weight available per question, summed).
 - The recommendation is the concentration with the **highest normalized
   score**.
 - **Deterministic tie handling** (documented in `lib/scoring/tie-break.ts`):
 
   1. highest normalized score (rounded to 1 decimal),
-  2. highest raw score,
-  3. high-value tie-breaker questions (`tieBreakerPriority`, lowest number
-     first),
-  4. a fixed, documented concentration priority order.
+  2. most strong responses — questions where the chosen answer carried a
+     weight ≥ 4 for that concentration,
+  3. a fixed, documented concentration priority order.
 
   No randomness, timestamps, or database row order ever participate, so the
   same answers always produce the same result.
@@ -71,21 +119,131 @@ directly. It is inferred from their answers by the server-side scoring engine.
 > indication of fit, not a final academic decision and not a prediction of
 > success. Students should discuss options with academic staff.
 
-### Scoring configuration separation (STEP 12)
+### Weight security
 
-Scoring **weights** are server-only. The application is split so that Client
-Components can never receive them:
+Scoring weights live only in PostgreSQL and in server-only code
+(`lib/scoring`, `lib/questionnaires`). The student payload, the assessment
+session, and every Client Component receive question metadata only. There is
+no public weights endpoint; every admin mutation requires an authenticated
+admin session (`requireAdmin()` server-side on each action).
 
-| Layer | Files | Contents |
-| --- | --- | --- |
-| Client-safe public metadata | `data/publicQuestions.ts` | Question IDs, text, type, category, option IDs/labels — **no weights** |
-| Server-only authoritative config | `data/informaticsQuestions.ts`, `data/informationSystemsQuestions.ts` | Full configuration **including per-option weights**; guarded with `import "server-only"` |
-| Server-only weight maps | `lib/scoring/server/informaticsWeights.ts`, `lib/scoring/server/informationSystemsWeights.ts` | Derived authoritative weight maps, also `server-only` |
 
-`lib/weight-parity.test.ts`, `lib/weight-parity-is.test.ts`, and
-`lib/weight-parity-cross.test.ts` prove the public view and the authoritative
-configuration never drift (same question/option IDs, text, labels, types, and
-categories; 20 questions per major; no weights in the public view).
+
+## Admin — Questionnaire Management
+
+The admin area (`/admin/questions`, protected by the same admin login) manages
+questions, options, and scoring weights entirely through the database.
+
+### Admin workflow
+
+```text
+Login
+  → Questions
+  → Choose Major (Informatics / Information Systems)
+  → See Published Version
+  → Create Draft From Published
+  → Add / Edit / Delete Questions
+  → Edit Options
+  → Configure Weight Matrix
+  → Reorder Questions
+  → Validation
+  → Preview (admin-only "Show Weights" toggle)
+  → Publish
+  → New students use the new version
+```
+
+- **Published / Archived versions are read-only.** Every mutation re-verifies
+  server-side that the target version is a `DRAFT` — a direct URL edit attempt
+  against a published version is rejected, not just hidden by the UI.
+- **Create Draft From Published** clones the current published version
+  (questions, options, weights) into a new draft. There is one active draft per
+  major; if one already exists it is reopened instead of duplicated.
+- The question editor covers question text/type, answer options (add, edit,
+  reorder, delete), and the **weight matrix** per concentration.
+- **Publish** validates the whole draft (exactly 20 questions, valid orders,
+  labels, weights, coverage) inside the same database transaction that
+  archives the previous published version and marks the draft `PUBLISHED` — a
+  major can never end up with two active published versions.
+- **Version history** lists archived versions, which remain queryable for
+  historical assessments.
+
+### Why published versions are immutable
+
+Questionnaire versioning protects historical integrity:
+
+1. Student A starts Informatics Version 1.
+2. The admin publishes Version 2.
+3. Student A continues answering and submitting **Version 1** (the locked
+   version stored in their session). Student B, who starts later, gets
+   Version 2.
+4. Version 1 becomes `ARCHIVED` but is never deleted or modified, so Student
+   A's stored answers, snapshots, scores, and recommendation stay accurate
+   forever.
+
+Changing a published questionnaire directly would retroactively corrupt
+results. That is why edits always happen in a draft, and drafts are only ever
+cloned from — never written back into — a published version.
+
+## Questionnaire writing guide (for future admins)
+
+The questionnaire targets **first-year / freshman students** who may not yet
+know what DevOps, ERP, IoT, AI, or cybersecurity mean. Questions should
+measure **potential interest and natural preference**, never existing technical
+knowledge.
+
+**Do focus on:**
+
+- curiosity and motivation;
+- preferred activities and ways of working;
+- problem-solving and thinking styles;
+- creativity and investigative tendencies;
+- comfort with data, patterns, processes, and reliability;
+- interest in technology, health, games, and physical/digital connections.
+
+**Do avoid:**
+
+- advanced terminology (penetration testing, Kubernetes, CI/CD, ERP modules,
+  neural networks, sensor protocols, …);
+- testing prior coursework or technical knowledge;
+- leading students toward a named concentration
+  (e.g. "Would you like to study Cyber Security?" is a giveaway; asking about
+  investigating unusual events is not);
+- assuming university-level vocabulary.
+
+Good examples (from the initial seed):
+
+- "When something unusual happens, are you curious to investigate what caused it?"
+- "Would you enjoy creating an interactive world where people can explore and make choices?"
+- "Are you curious about how smart watches, sensors, or other devices can communicate with each other?"
+- "When you see a lot of information, do you enjoy looking for patterns in it?"
+- "Would you enjoy finding ways to make a complicated process simpler and more organized?"
+
+Keep the mix of question types (Likert, Agreement, Multiple Choice, Scenario,
+Priority) and keep each major's questionnaire balanced so every concentration
+has meaningful scoring opportunities.
+
+## Weight guide (for future admins)
+
+Each answer option's **weight** is how strongly that answer indicates each
+concentration:
+
+```text
+0    no signal
+1–2  weak indication
+3    moderate indication
+4–5  strong indication
+```
+
+- Weights are whole numbers from **0 to 5**.
+- One answer may contribute to **several concentrations** (interdisciplinary
+  interests are fine and encouraged).
+- Weights are server-side only — students never see them.
+- Normalization divides each concentration's raw score by its **theoretical
+  maximum** (the best weight that concentration can receive per question,
+  summed over the questionnaire), producing a comparable 0–100 score. That is
+  why zero-weights on some questions are acceptable, but every concentration
+  must be able to score somewhere (publishing is blocked otherwise).
+
 
 
 ## Getting Started
@@ -178,7 +336,8 @@ DIRECT_URL="postgresql://postgres.<PROJECT_REF>:<PASSWORD>@<POOLER_HOST>:5432/po
 | `DATABASE_URL` | Yes | Supabase transaction-pooler connection (application runtime) |
 | `DIRECT_URL` | Yes | Supabase session-pooler connection (Prisma CLI / migrations) |
 | `AUTH_SECRET` | Yes | Signs the admin session cookie (JWT/HS256). Generate with `openssl rand -base64 32` |
-| `ADMIN_EMAIL` | Seed | Email of the initial admin account (provisioned with `npm run db:seed`) |
+| `ADMIN_USERNAME` | Seed | Username of the initial admin account (provisioned with `npm run db:seed`) |
+| `ADMIN_EMAIL` | Seed | Optional email for the initial admin (defaults to `<username>@president.ac.id`) |
 | `ADMIN_PASSWORD` | Seed | Password of the initial admin account (bcrypt-hashed; only the hash is stored) |
 
 > **Security:** never commit `.env`, never use `NEXT_PUBLIC_` prefixes for
@@ -225,16 +384,16 @@ server-side.
 
 ### How it works
 
-1. `/admin/login` — admin enters email + password.
-2. The server validates the input with **Zod**, looks up the `Admin` record
-   through **Prisma**, and verifies the password with **bcrypt** (bcryptjs,
-   cost **12**).
+1. `/admin/login` — admin enters **username** + password.
+2. The server validates the input with **Zod**, looks up the `Admin` record by
+   username through **Prisma**, and verifies the password with **bcrypt**
+   (bcryptjs, cost **12**).
 3. On success the server issues a signed session token (**JWT, HS256** signed
    with `AUTH_SECRET` using the `jose` library) and stores it in an
    **HttpOnly** cookie.
-4. `/admin/dashboard` and all future admin routes are protected by a
-   server-side layout that verifies the session on every request and redirects
-   logged-out visitors to `/admin/login`.
+4. `/admin/dashboard` and all admin routes are protected by a server-side
+   layout that verifies the session on every request and redirects logged-out
+   visitors to `/admin/login`.
 
 ### Session cookie
 
@@ -254,19 +413,43 @@ logout removes the cookie from the browser, and deleting the admin record in
 the database invalidates future access (the admin is looked up on every
 protected request). This matches the signed-session approach chosen for STEP 9.
 
-### Provisioning the initial admin
+### Provisioning the initial admin and questionnaires
 
-Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `.env` (placeholders are in
+Set `ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env` (placeholders are in
 `.env.example`), then run:
 
 ```bash
 npm run db:seed
 ```
 
-The seed (`prisma/seed.ts`) normalizes the email, bcrypt-hashes the password
-(cost 12), and **upserts** the `Admin` record — running it again never
-duplicates the admin, and a changed `ADMIN_PASSWORD` updates the stored hash
-(convenient for manual password rotation). Only the hash is ever stored.
+`prisma/seed.ts` does two idempotent, non-destructive things:
+
+1. **Admin provisioning** — normalizes the username (trim + lowercase),
+   bcrypt-hashes the password (cost 12), and **upserts** the `Admin` record by
+   username (falling back to email for backwards compatibility). Running it
+   again never duplicates the admin; a changed `ADMIN_PASSWORD` updates the
+   stored hash. Only the hash is ever stored.
+2. **Questionnaire seeding** (`prisma/seed-questionnaires.ts`) — creates
+   **Version 1 (PUBLISHED)** of each major's questionnaire (20 freshman-friendly
+   questions per major, with options and weights) from the seed data in
+   `prisma/question-bank.ts`.
+
+Production safety: the questionnaire seed **never overwrites** an existing
+published questionnaire. If a published version already exists for a major,
+that major is skipped. To intentionally re-seed, archive/delete the existing
+versions first.
+
+Separate commands:
+
+```bash
+npm run db:seed:questionnaires   # questionnaire seed only
+npm run db:backfill              # one-time legacy snapshot backfill
+```
+
+The legacy backfill (`prisma/backfill-snapshots.ts`) resolves pre-versioning
+`AssessmentAnswer` rows against the old question bank to populate
+`questionSnapshot` / `answerSnapshot`, and links legacy assessments to their
+major's seeded Version 1.
 
 ### Generating AUTH_SECRET
 
@@ -282,14 +465,14 @@ to a known secret. Keep it server-side only — never `NEXT_PUBLIC_AUTH_SECRET`.
 
 ### Security notes
 
-- Login errors are generic (`Invalid email or password.`) so responses never
-  reveal whether an email exists or a password was wrong.
-- Emails are normalized (trim + lowercase) consistently for seeding, login,
+- Login errors are generic (`Invalid username or password.`) so responses
+  never reveal whether a username exists or a password was wrong.
+- Usernames are normalized (trim + lowercase) consistently for seeding, login,
   and database lookups.
 - `passwordHash` is never selected for UI rendering and never sent to the
   browser; plaintext passwords never enter logs, URLs, or client state.
-- A lightweight in-memory login rate limit (10 failed attempts per email per
-  15 minutes) is included. It is per-process by design.
+- A lightweight in-memory login rate limit (10 failed attempts per username
+  per 15 minutes) is included. It is per-process by design.
 - **Deployment hardening:** before public deployment, add a production-grade
   rate limiter (e.g. a managed or Redis-backed store), serve the app over
   HTTPS so the `Secure` cookie is honored, and keep `AUTH_SECRET` in your
@@ -299,12 +482,25 @@ to a known secret. Keep it server-side only — never `NEXT_PUBLIC_AUTH_SECRET`.
 
 ### Database models
 
-- `Admin` — administrator accounts (email + password hash)
-- `Assessment` — one completed student assessment
-- `AssessmentAnswer` — one stored answer per question (unique per
-  `assessmentId + questionId`)
+- `Admin` — administrator accounts (username + email + password hash)
+- `QuestionnaireVersion` — a versioned questionnaire per major
+  (`major`, `versionNumber`, `status`: `DRAFT` / `PUBLISHED` / `ARCHIVED`,
+  `publishedAt`). One published version per major.
+- `Question` — one question of a version (`order`, `type`, `text`,
+  `helpText`, `category`, `isRequired`); unique `(version, order)`.
+- `QuestionOption` — one answer option of a question (`order`, `label`,
+  `numericValue`); unique `(question, order)`.
+- `QuestionOptionWeight` — how strongly an option indicates each
+  concentration (`concentration`, `weight` 0–5); unique
+  `(questionOption, concentration)`.
+- `Assessment` — one completed student assessment, linked to the
+  `QuestionnaireVersion` the student answered.
+- `AssessmentAnswer` — one stored answer per question, with `questionSnapshot`
+  / `answerSnapshot` (the text/label at submission time) and `optionId`
+  (unique per `assessmentId + questionId`).
 - `ConcentrationScore` — one score per concentration per assessment (unique per
-  `assessmentId + concentration`)
+  `assessmentId + concentration`). Raw and normalized scores are stored and
+  never recalculated from later questionnaire versions.
 
 ## Admin dashboard (STEP 10)
 
@@ -456,11 +652,13 @@ npm run lint        # ESLint (Next.js core-web-vitals + TypeScript rules)
 npm run build       # Production build (type-check + static generation included)
 ```
 
-The suite covers scoring correctness (weights, maxima, normalization, ties,
-AI vs AI Healthcare, Data Science vs ERP, VR profiles), client/server weight
-parity, session/credentials/rate-limit/auth logic, dashboard math, and
-assessment-list query parsing. Tests are pure logic / mocked — they never
-mutate production Supabase data.
+The suite covers scoring correctness (database weights, maxima, normalization,
+ties, client/server weight separation), questionnaire validation (exactly-20,
+orders, weight bounds, cross-major rejection, coverage), draft/publish/version
+lifecycle, admin auth, session/credentials/rate-limit logic, dashboard math,
+assessment-list query parsing, and the freshman-friendly initial question bank
+(no forbidden technical terms, coverage, balance). Tests are pure logic /
+mocked — they never mutate production Supabase data.
 
 ## Production build
 
@@ -489,11 +687,12 @@ the `postinstall` script (`prisma generate`), so no `vercel.json` is needed.
    DATABASE_URL   Supabase transaction pooler (port 6543, ?pgbouncer=true)
    DIRECT_URL     Supabase session pooler (port 5432)
    AUTH_SECRET    strong value, e.g. `openssl rand -base64 32`
-   ADMIN_EMAIL    initial admin email (seed only)
+   ADMIN_USERNAME initial admin username (seed only)
+   ADMIN_EMAIL    optional admin email (seed only, defaults to <username>@president.ac.id)
    ADMIN_PASSWORD initial admin password (seed only)
    ```
 
-   `ADMIN_EMAIL` / `ADMIN_PASSWORD` are only needed to provision the admin
+   `ADMIN_USERNAME` / `ADMIN_PASSWORD` are only needed to provision the admin
    (`npm run db:seed`); they can be removed from Vercel after provisioning if
    desired, because runtime login always verifies against the stored bcrypt
    hash.
@@ -514,23 +713,41 @@ the `postinstall` script (`prisma generate`), so no `vercel.json` is needed.
 ```text
 app/                      App Router pages and route handlers
   assessment/             student intro / questions / review / result
-  admin/                  admin login + protected area (dashboard, records)
-  api/assessments/        POST submission route (server scoring + transaction)
+  admin/                  admin login + protected area (dashboard, records,
+                          questionnaire management)
+  api/assessments/        POST submission route (DB weights + snapshots + transaction)
+  api/questionnaire/      POST lock current published version for a major (no weights)
 components/               UI + feature components (student, admin, results)
-data/                     questionnaire configuration
-  publicQuestions.ts      client-safe public metadata (no weights)
-  informaticsQuestions.ts server-only authoritative config (weights)
-  informationSystemsQuestions.ts server-only authoritative config (weights)
+  admin/questions/        version cards, question list/editor, weight editor,
+                          validation panel, preview, publish dialog
+data/                     legacy question configuration + display helpers
+  publicQuestions.ts      legacy client-safe metadata (used for historical backfill)
+  informaticsQuestions.ts legacy server-only config (used for historical backfill)
+  informationSystemsQuestions.ts legacy server-only config (used for historical backfill)
 lib/
+  questionnaires/         database-managed questionnaire services
+    validation.ts         pure publish validation (exactly-20, weights, coverage)
+    scoring.ts            DB version → scoring pipeline + answer snapshots
+    admin-questionnaire.ts admin data service (draft clone, edits, atomic publish)
+    student-questionnaire.ts published-version locking
+    serialization.ts      weight-free student question serialization
   scoring/                pure scoring pipeline (server-authoritative)
-    server/               server-only weight maps
+    score-assessment.ts   scoring core (accepts an explicit DB question set)
+    tie-break.ts          deterministic tie handling (normalized → strong responses → priority)
   auth/                   admin sessions, credentials, rate limiting
-  admin/                  dashboard + assessment records (server-only)
+  admin/                  dashboard + assessment records + questionnaire actions
   results/                result-page helpers (deterministic explanations)
   generated/prisma/       generated Prisma Client (git-ignored)
-prisma/                   schema, migrations, seed (admin provisioning)
+prisma/                   schema, migrations, seed (admin + questionnaires)
+  question-bank.ts        initial freshman-friendly question data (seed only)
+  seed-questionnaires.ts  idempotent questionnaire seed
+  backfill-snapshots.ts   one-time legacy snapshot backfill
 tests/                    Vitest-only server-only stub
 ```
+
+> The old TypeScript question files under `data/` are kept **only** as the
+> historical backfill source for legacy assessments. They are not read by the
+> production student flow — the database owns all live questionnaire content.
 
 ## Learn More
 

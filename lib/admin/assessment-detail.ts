@@ -9,27 +9,40 @@ import {
 } from "@/lib/results/result-utils";
 
 /**
- * STEP 11 assessment detail helpers (pure, framework-neutral).
+ * STEP 11 assessment detail helpers (pure, framework-neutral, snapshot-aware).
  *
  * The detail page loads the Assessment with its stored AssessmentAnswer and
  * ConcentrationScore rows, then uses these helpers to turn stored IDs into
- * human-readable review data:
+ * human-readable review data.
  *
- *  - `resolveAssessmentAnswers` resolves stored (questionId, answerKey) pairs
- *    against the trusted TypeScript question configuration, in original
- *    questionnaire order, and never crashes on unknown/corrupt entries.
- *  - `getAnswerCompleteness` flags a stored answer count that differs from the
- *    expected 20 questions.
- *  - `resolveConcentrationScores` keeps only the major's valid concentrations,
- *    sorts by normalized score descending (reusing the result-page helpers),
- *    and marks the recommended winner.
+ * Resolution order for historical answers (requirement 37/71):
+ *   1. the QuestionnaireVersion the assessment references (question text,
+ *      option labels from that version — immutable once published);
+ *   2. the stored questionSnapshot / answerSnapshot (captured at submission
+ *      time for new assessments);
+ *   3. the legacy TypeScript question bank (pre-versioning assessments).
+ *
+ * `resolveConcentrationScores` keeps only the major's valid concentrations,
+ * sorts by normalized score descending, and marks the recommended winner.
  */
 
 /** The minimal stored answer row shape (superset of Prisma's AssessmentAnswer). */
 export type StoredAnswerRow = {
   questionId: string;
   answerKey: string;
-  numericValue: number | null;
+  optionId?: string | null;
+  numericValue?: number | null;
+  questionSnapshot?: string | null;
+  answerSnapshot?: string | null;
+};
+
+/** A question from the referenced version, reduced for resolution. */
+export type VersionQuestionForResolution = {
+  id: string;
+  order: number;
+  type: QuestionType;
+  text: string;
+  options: ReadonlyArray<{ id: string; label: string }>;
 };
 
 export type ResolvedAnswerRow = {
@@ -56,17 +69,20 @@ export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
 export const UNRESOLVED_ANSWER_LABEL = "Unable to resolve stored answer";
 
 /**
- * Resolves stored answer rows to readable review rows for the assessment's
- * major. Every question from the trusted configuration is present in order
- * (unanswered ones render as unresolved); any stored row whose questionId is
- * not part of that configuration is appended as an orphan row so admins can
- * still inspect corrupt data instead of the page crashing.
+ * Resolves stored answer rows to readable review rows for the assessment.
+ * Every question from the referenced version (or the legacy bank) is present
+ * in order; unanswered ones render as unresolved; orphan rows are appended so
+ * admins can still inspect corrupt data instead of the page crashing.
  */
 export function resolveAssessmentAnswers(
   major: Major,
   answers: readonly StoredAnswerRow[],
+  versionQuestions?: readonly VersionQuestionForResolution[],
 ): ResolvedAnswerRow[] {
-  const questions = getQuestionsForMajor(major);
+  const questions = versionQuestions?.length
+    ? versionQuestions
+    : (getQuestionsForMajor(major) as unknown as VersionQuestionForResolution[]);
+
   const answersByQuestionId = new Map(
     answers.map((answer) => [answer.questionId, answer]),
   );
@@ -86,16 +102,18 @@ export function resolveAssessmentAnswers(
       };
     }
 
-    const option = question.options.find((candidate) => candidate.id === stored.answerKey);
+    const optionId = stored.optionId ?? stored.answerKey;
+    const option = question.options.find((candidate) => candidate.id === optionId);
+
     return {
       questionId: question.id,
       questionNumber: index + 1,
       questionType: question.type,
       questionText: question.text,
-      answerKey: stored.answerKey,
-      answerLabel: option ? option.label : null,
+      answerKey: optionId,
+      answerLabel: option?.label ?? stored.answerSnapshot ?? null,
       numericValue: stored.numericValue ?? null,
-      resolved: option !== undefined,
+      resolved: option !== undefined || Boolean(stored.answerSnapshot),
     };
   });
 
@@ -106,11 +124,11 @@ export function resolveAssessmentAnswers(
       questionId: answer.questionId,
       questionNumber: null,
       questionType: null,
-      questionText: null,
-      answerKey: answer.answerKey,
-      answerLabel: null,
+      questionText: answer.questionSnapshot ?? null,
+      answerKey: answer.optionId ?? answer.answerKey,
+      answerLabel: answer.answerSnapshot ?? null,
       numericValue: answer.numericValue ?? null,
-      resolved: false,
+      resolved: Boolean(answer.questionSnapshot && answer.answerSnapshot),
     }));
 
   return [...rows, ...orphanRows];

@@ -35,6 +35,20 @@ enum Concentration {
   ERP
 }
 
+enum QuestionnaireStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum QuestionType {
+  LIKERT
+  AGREEMENT
+  MULTIPLE_CHOICE
+  SCENARIO
+  PRIORITY
+}
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
@@ -42,20 +56,98 @@ enum Concentration {
 model Admin {
   id           String   @id @default(cuid())
   email        String   @unique
+  username     String?  @unique
   passwordHash String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
 
+// A versioned questionnaire. One major may have many versions, but at most
+// one PUBLISHED version at a time. PUBLISHED/ARCHIVED versions are immutable;
+// admins edit DRAFT versions and publish them atomically.
+model QuestionnaireVersion {
+  id            String              @id @default(cuid())
+  major         Major
+  versionNumber Int
+  status        QuestionnaireStatus @default(DRAFT)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  publishedAt   DateTime?
+  questions     Question[]
+  assessments   Assessment[]
+
+  @@unique([major, versionNumber])
+  @@index([major, status])
+}
+
+// One question belonging to exactly one questionnaire version. The `order`
+// field is the stable display position (1-based, unique within the version).
+model Question {
+  id                     String               @id @default(cuid())
+  questionnaireVersionId String
+  order                  Int
+  type                   QuestionType
+  text                   String
+  helpText               String?
+  category               String?
+  isRequired             Boolean              @default(true)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  questionnaireVersion   QuestionnaireVersion @relation(fields: [questionnaireVersionId], references: [id], onDelete: Cascade)
+  options                QuestionOption[]
+
+  @@unique([questionnaireVersionId, order])
+  @@index([questionnaireVersionId])
+}
+
+// One answer option of a question. Option `order` is stable within the
+// question (1-based, unique). `numericValue` carries the ordinal for
+// LIKERT/AGREEMENT/PRIORITY scales (1–5) and is null otherwise.
+model QuestionOption {
+  id           String                 @id @default(cuid())
+  questionId   String
+  order        Int
+  label        String
+  numericValue Int?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  question     Question               @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  weights      QuestionOptionWeight[]
+
+  @@unique([questionId, order])
+  @@index([questionId])
+}
+
+// Server-side scoring configuration: how much one answer contributes to each
+// concentration. Integer weights in the range 0–5. A single option may carry
+// weights for several concentrations. Only the concentrations belonging to
+// the question's major are allowed.
+model QuestionOptionWeight {
+  id               String           @id @default(cuid())
+  questionOptionId String
+  concentration    Concentration
+  weight           Int
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  questionOption   QuestionOption   @relation(fields: [questionOptionId], references: [id], onDelete: Cascade)
+
+  @@unique([questionOptionId, concentration])
+  @@index([questionOptionId])
+}
+
 model Assessment {
-  id                       String            @id @default(cuid())
+  id                       String               @id @default(cuid())
   fullName                 String
   major                    Major
   recommendedConcentration Concentration
   recommendedScore         Float
   confidenceLabel          String?
-  createdAt                DateTime          @default(now())
+  createdAt                DateTime             @default(now())
   completedAt              DateTime?
+  // The questionnaire version the student answered. Null for legacy
+  // assessments created before questionnaire versioning existed.
+  questionnaireVersionId   String?
+  questionnaireVersion     QuestionnaireVersion? @relation(fields: [questionnaireVersionId], references: [id], onDelete: SetNull)
   answers                  AssessmentAnswer[]
   concentrationScores      ConcentrationScore[]
 }
@@ -65,9 +157,14 @@ model AssessmentAnswer {
   assessmentId String
   questionId   String
   answerKey    String
-  numericValue Int?
-  createdAt    DateTime   @default(now())
-  assessment   Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
+  // Mirrors answerKey for new rows (readability of intent). Legacy rows have
+  // optionId = null and fall back to answerKey.
+  optionId           String?
+  numericValue       Int?
+  questionSnapshot   String?
+  answerSnapshot     String?
+  createdAt          DateTime   @default(now())
+  assessment         Assessment @relation(fields: [assessmentId], references: [id], onDelete: Cascade)
 
   @@unique([assessmentId, questionId])
   @@index([assessmentId])

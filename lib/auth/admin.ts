@@ -6,12 +6,12 @@ import { ADMIN_LOGIN_ROUTE } from "@/lib/auth/config";
 import { getAdminSession } from "@/lib/auth/session";
 
 /**
- * Admin identity helpers (STEP 9).
+ * Admin identity helpers.
  *
  * getCurrentAdmin() verifies the session token AND confirms the referenced
  * Admin record still exists in the database, so deleting or deactivating an
- * admin invalidates their future access. Only id and email are selected —
- * passwordHash is never returned to the UI.
+ * admin invalidates their future access. Only id, username, and email are
+ * selected — passwordHash is never returned to the UI.
  *
  * requireAdmin() is the server-side guard used by protected routes/layouts.
  * Client-side state is NEVER used for authorization; access is controlled
@@ -20,13 +20,14 @@ import { getAdminSession } from "@/lib/auth/session";
 
 export type CurrentAdmin = {
   id: string;
+  username: string;
   email: string;
 };
 
 /**
- * Returns the current admin ({ id, email }) or null when the visitor is not
- * authenticated (no session, invalid/expired session, or deleted admin).
- * Never memoized/cached — every call reflects the current request.
+ * Returns the current admin ({ id, username, email }) or null when the visitor
+ * is not authenticated (no session, invalid/expired session, or deleted
+ * admin). Never memoized/cached — every call reflects the current request.
  */
 export async function getCurrentAdmin(): Promise<CurrentAdmin | null> {
   const session = await getAdminSession();
@@ -37,14 +38,18 @@ export async function getCurrentAdmin(): Promise<CurrentAdmin | null> {
   try {
     const admin = await prisma.admin.findUnique({
       where: { id: session.adminId },
-      select: { id: true, email: true },
+      select: { id: true, username: true, email: true },
     });
 
     if (!admin) {
       return null;
     }
 
-    return { id: admin.id, email: admin.email };
+    return {
+      id: admin.id,
+      username: admin.username ?? session.username,
+      email: admin.email,
+    };
   } catch (error) {
     console.error("[auth] failed to load the current admin:", error);
     return null;

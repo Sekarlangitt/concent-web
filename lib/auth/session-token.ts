@@ -2,12 +2,12 @@ import { SignJWT, jwtVerify } from "jose";
 import { SESSION_TOKEN_ALGORITHM } from "@/lib/auth/config";
 
 /**
- * Signed admin session token (STEP 9).
+ * Signed admin session token (STEP 9, username-based).
  *
- * The token is a JWT signed with HMAC-SHA256 using AUTH_SECRET. Only three
- * claims are stored: adminId, email, and the JWT-standard iat/exp timestamps.
- * No password hash, no database credentials — the payload is minimal by
- * design.
+ * The token is a JWT signed with HMAC-SHA256 using AUTH_SECRET. Only four
+ * claims are stored: adminId, username, email, and the JWT-standard
+ * iat/exp timestamps. No password hash, no database credentials — the
+ * payload is minimal by design.
  *
  * This module is pure (no Next.js request context, no database) so the token
  * logic can be unit tested directly. Cookie handling lives in session.ts.
@@ -22,6 +22,7 @@ import { SESSION_TOKEN_ALGORITHM } from "@/lib/auth/config";
 
 export type AdminSessionClaims = {
   adminId: string;
+  username: string;
   email: string;
 };
 
@@ -36,7 +37,11 @@ export async function signSessionToken(
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + expiresInSeconds;
 
-  return new SignJWT({ adminId: admin.adminId, email: admin.email })
+  return new SignJWT({
+    adminId: admin.adminId,
+    username: admin.username,
+    email: admin.email,
+  })
     .setProtectedHeader({ alg: SESSION_TOKEN_ALGORITHM })
     .setIssuedAt(issuedAt)
     .setExpirationTime(expiresAt)
@@ -61,11 +66,19 @@ export async function verifySessionToken(
       algorithms: [SESSION_TOKEN_ALGORITHM],
     });
 
-    if (typeof payload.adminId !== "string" || typeof payload.email !== "string") {
+    if (
+      typeof payload.adminId !== "string" ||
+      typeof payload.username !== "string" ||
+      typeof payload.email !== "string"
+    ) {
       return null;
     }
 
-    return { adminId: payload.adminId, email: payload.email };
+    return {
+      adminId: payload.adminId,
+      username: payload.username,
+      email: payload.email,
+    };
   } catch {
     // Signature mismatch, expired token, or malformed payload — all equivalent
     // to an unauthenticated visitor.

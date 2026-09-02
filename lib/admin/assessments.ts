@@ -93,8 +93,9 @@ export async function getAssessments(
 }
 
 /**
- * Loads one assessment with its stored answers and concentration scores.
- * Returns null when the id does not exist.
+ * Loads one assessment with its stored answers, concentration scores, and the
+ * questionnaire version it referenced (when available). Returns null when the
+ * id does not exist.
  */
 export async function getAssessmentDetail(id: string) {
   return prisma.assessment.findUnique({
@@ -102,6 +103,14 @@ export async function getAssessmentDetail(id: string) {
     include: {
       answers: true,
       concentrationScores: true,
+      questionnaireVersion: {
+        include: {
+          questions: {
+            orderBy: { order: "asc" },
+            include: { options: { orderBy: { order: "asc" } } },
+          },
+        },
+      },
     },
   });
 }

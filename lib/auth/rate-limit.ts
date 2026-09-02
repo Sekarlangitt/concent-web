@@ -1,11 +1,11 @@
 /**
- * Lightweight, in-memory login attempt rate limiter (STEP 9, requirement 48).
+ * Lightweight, in-memory login attempt rate limiter.
  *
  * This is deliberately simple: a sliding window of failure timestamps per
- * key (the normalized admin email). It provides small server-side protection
- * against brute-force login attempts without locking anyone out permanently —
- * after the window passes, attempts reset automatically, and the store clears
- * on process restart.
+ * key (the normalized admin username). It provides small server-side
+ * protection against brute-force login attempts without locking anyone out
+ * permanently — after the window passes, attempts reset automatically, and
+ * the store clears on process restart.
  *
  * LIMITATION: state is per-process. On a multi-instance/serverless deployment
  * each instance keeps its own window, so this is best-effort hardening, not a

@@ -23,29 +23,63 @@ export const fullNameSchema = z
 /** Major must be exactly one of the official enum values. */
 export const majorSchema = z.enum(MAJOR_IDS);
 
+/** One of the supported question types. */
+export const questionTypeSchema = z.enum([
+  "LIKERT",
+  "AGREEMENT",
+  "MULTIPLE_CHOICE",
+  "SCENARIO",
+  "PRIORITY",
+]);
+
+/** Client-safe answer option stored in the session (no weights). */
+export const studentQuestionOptionSchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  label: z.string().trim().min(1).max(1000),
+});
+
+/** Client-safe question stored in the session (no weights). */
+export const studentQuestionSchema = z.object({
+  id: z.string().trim().min(1).max(200),
+  type: questionTypeSchema,
+  text: z.string().trim().min(1).max(2000),
+  category: z.string().trim().max(100).optional(),
+  helpText: z.string().trim().max(2000).nullable().optional(),
+  options: z.array(studentQuestionOptionSchema).min(2).max(30),
+});
+
 /**
- * Temporary answers keyed by stable question id (e.g. "INF_Q01") holding the
- * selected option id (e.g. "INF_Q01_A"). Persisted only for the current
- * browser session; the authoritative copy is written to the database in a
- * later step.
+ * Temporary answers keyed by question id holding the selected option id.
+ * Persisted only for the current browser session; the authoritative copy is
+ * written to the database on submission.
  */
 export const assessmentAnswersSchema = z.record(z.string(), z.string());
 
 /**
  * Zero-based index of the question currently being shown. Any non-negative
  * integer is accepted here; flows clamp it into the actual question set range
- * (20 questions → indices 0–19) on restore. An out-of-range value is
- * recovered by clamping instead of discarding the whole session, because the
- * current position is not core identity data (unlike fullName/major).
+ * on restore.
  */
 export const currentQuestionSchema = z.number().int().min(0);
 
-/** The temporary assessment session persisted in sessionStorage. */
+/**
+ * The temporary assessment session persisted in sessionStorage.
+ *
+ * `questionnaireVersionId` and `questions` are set when the assessment starts
+ * (the server locks the current PUBLISHED questionnaire version for the
+ * major). Both are optional so legacy sessions created before questionnaire
+ * versioning still parse; the assessment flow treats a session without them
+ * as needing to be restarted.
+ */
 export const assessmentSessionSchema = z.object({
   fullName: fullNameSchema,
   major: majorSchema,
+  questionnaireVersionId: z.string().trim().min(1).optional(),
+  questions: z.array(studentQuestionSchema).min(1).optional(),
   answers: assessmentAnswersSchema.default({}),
   currentQuestion: currentQuestionSchema.default(0),
 });
 
 export type AssessmentSession = z.infer<typeof assessmentSessionSchema>;
+export type StudentQuestion = z.infer<typeof studentQuestionSchema>;
+export type StudentQuestionOption = z.infer<typeof studentQuestionOptionSchema>;

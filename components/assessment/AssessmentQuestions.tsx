@@ -9,7 +9,6 @@ import type { AssessmentSession } from "@/lib/assessment-session";
 import {
   clampQuestionIndex,
   getEditIndexFromParam,
-  getQuestionsForMajor,
   getValidAnswersForMajor,
   isQuestionAnswered,
   type AnyQuestion,
@@ -47,10 +46,12 @@ const REQUIRED_ANSWER_MESSAGE = "Please select an answer before continuing.";
  */
 export function AssessmentQuestions({ session }: { session: AssessmentSession }) {
   const router = useRouter();
-  const questions = getQuestionsForMajor(session.major);
+  // The questions come from the questionnaire version locked when the
+  // assessment started (stored in the session) — never from static data.
+  const questions = session.questions ?? [];
 
-  // Defensive fallback: the session schema only allows the two official
-  // majors, so an empty question set is unreachable in normal flows.
+  // Defensive fallback: a session without questions cannot render a
+  // questionnaire. This happens only for legacy pre-versioning sessions.
   if (questions.length === 0) {
     return (
       <section className="mx-auto w-full max-w-3xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">

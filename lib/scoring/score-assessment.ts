@@ -1,40 +1,39 @@
 import "server-only";
 
 import type { Concentration } from "@/data/concentrations";
-import type { QuestionType } from "@/data/questionTypes";
 import type { Major } from "@/lib/major";
-import { QUESTIONS_PER_MAJOR } from "@/lib/major";
 import { getMaxScoresForConcentrations } from "@/lib/scoring-utils";
 import { getConfidenceLabel } from "@/lib/scoring/confidence";
 import { normalizeScore, roundScore } from "@/lib/scoring/normalization";
-import { getInformaticsScoringConfig } from "@/lib/scoring/server/informaticsWeights";
-import { getInformationSystemsScoringConfig } from "@/lib/scoring/server/informationSystemsWeights";
 import {
   resolveTieBreak,
   type TieBreakContext,
-  type TieBreakerQuestion,
 } from "@/lib/scoring/tie-break";
 import type {
   AssessmentScoreResult,
   ExplanationMetadata,
   ScoredConcentration,
+  ScoreQuestion,
+  ScoreQuestionSet,
   ValidatedAnswer,
 } from "@/lib/scoring/types";
 
 /**
- * Pure, server-safe assessment scoring (STEP 7).
+ * Pure, server-safe assessment scoring (STEP 7, database-questionnaire edition).
  *
  * `scoreAssessment` is the authoritative scoring pipeline:
  *
- *   1. Resolve the student's major to the trusted 20-question set.
- *   2. Strictly validate every submitted answer against the configuration
- *      (no client-supplied scores/weights are ever accepted).
- *   3. Accumulate trusted option weights into per-concentration raw scores.
- *   4. Compute theoretical maximum scores from the question configuration.
- *   5. Normalize each concentration independently to 0–100.
- *   6. Rank deterministically (normalized desc, raw desc, then tie logic).
- *   7. Determine the recommendation, its score, and a deterministic
+ *   1. Validate every submitted answer against the trusted question set
+ *      (loaded from the QuestionnaireVersion the student was locked to).
+ *   2. Accumulate trusted database weights into per-concentration raw scores.
+ *   3. Compute theoretical maximum scores from the question set.
+ *   4. Normalize each concentration independently to 0–100.
+ *   5. Rank deterministically (normalized desc, then documented tie logic).
+ *   6. Determine the recommendation, its score, and a deterministic
  *      confidence label.
+ *
+ * The question set is an explicit argument — the caller (the API route) loads
+ * it from PostgreSQL. This module never imports hardcoded question data.
  *
  * No Prisma calls live here — persistence is orchestrated by the route
  * handler inside a single transaction.
@@ -43,9 +42,7 @@ import type {
 /** Error thrown for any malformed/missing answer set. `message` is student-safe. */
 export class AssessmentSubmissionError extends Error {
   readonly code:
-    | "unknown-major"
     | "questionnaire-misconfigured"
-    | "unknown-question"
     | "incomplete"
     | "invalid-answer";
 
@@ -61,70 +58,16 @@ export class AssessmentSubmissionError extends Error {
 
 export type ScoreAssessmentInput = {
   major: Major;
-  /** Answers keyed by stable question id → stable option id. */
+  /** Answers keyed by question id → selected option id. */
   answers: Record<string, string>;
+  /** The trusted question set from the locked questionnaire version. */
+  questionSet: ScoreQuestionSet;
 };
-
-/** The question types whose options carry a meaningful 1–5 ordinal value. */
-const NUMERIC_QUESTION_TYPES: ReadonlySet<QuestionType> = new Set([
-  "LIKERT",
-  "AGREEMENT",
-  "PRIORITY",
-]);
-
-type QuestionSetConfig = {
-  questions: ReadonlyArray<{
-    id: string;
-    major: string;
-    type: QuestionType;
-    text: string;
-    category?: string;
-    tieBreakerPriority?: number;
-    options: ReadonlyArray<{
-      id: string;
-      label: string;
-      weights: Partial<Record<Concentration, number>>;
-    }>;
-  }>;
-  concentrations: readonly Concentration[];
-};
-
-/**
- * Central concentration-to-major enforcement (requirement 45): the valid
- * concentration set is decided here, never by the database enum alone.
- */
-function getQuestionSet(major: Major): QuestionSetConfig {
-  if (major === "INFORMATICS") {
-    const { questions, concentrations } = getInformaticsScoringConfig();
-    return { questions, concentrations };
-  }
-  if (major === "INFORMATION_SYSTEMS") {
-    const { questions, concentrations } = getInformationSystemsScoringConfig();
-    return { questions, concentrations };
-  }
-  throw new AssessmentSubmissionError(
-    "unknown-major",
-    "Unsupported major. Please start the assessment again.",
-  );
-}
-
-/**
- * Ordinal value for scaled question types (LIKERT/AGREEMENT/PRIORITY), based
- * on the option's position in the configured scale (1-based). Returns null
- * for scenario/multiple-choice questions, where position carries no ordinal
- * meaning and must never be inferred.
- */
-function getNumericValue(
-  questionType: QuestionType,
-  optionIndex: number,
-): number | null {
-  return NUMERIC_QUESTION_TYPES.has(questionType) ? optionIndex + 1 : null;
-}
 
 function buildExplanationMetadata(params: {
   winner: ScoredConcentration;
   ranked: readonly ScoredConcentration[];
-  questions: QuestionSetConfig["questions"];
+  questions: readonly ScoreQuestion[];
   resolvedAnswers: readonly ValidatedAnswer[];
   tieBreakStage: ExplanationMetadata["tieBreakStage"];
   tieBreakNote: string;
@@ -186,59 +129,76 @@ function buildExplanationMetadata(params: {
 }
 
 /**
- * Scores a completed assessment from trusted configuration.
+ * Scores a completed assessment from a trusted question set.
  *
  * Strict validation rules:
- *  - Every required question ID must be present with exactly one answer.
- *  - Unknown / cross-major question IDs are rejected (never silently scored).
+ *  - Every question in the question set must have exactly one answer.
+ *  - Unknown / cross-version question IDs are rejected (never silently scored).
  *  - The answer key must resolve to a real option of that question.
  */
 export function scoreAssessment(input: ScoreAssessmentInput): AssessmentScoreResult {
-  const { major, answers } = input;
-  const { questions, concentrations } = getQuestionSet(major);
+  const { major, answers, questionSet } = input;
+  const { questions, concentrations } = questionSet;
 
-  if (questions.length !== QUESTIONS_PER_MAJOR) {
+  if (questions.length === 0) {
     throw new AssessmentSubmissionError(
       "questionnaire-misconfigured",
-      "The questionnaire is not configured correctly. Please try again later.",
+      "The questionnaire could not be loaded. Please try again later.",
     );
   }
 
-  // Reject unknown or cross-major question IDs (strict validation).
-  const requiredQuestionIds = new Set(questions.map((question) => question.id));
+  // Every submitted answer must reference a question in this questionnaire
+  // version (rejects invented/cross-version/cross-major question ids).
+  const knownQuestionIds = new Set(questions.map((question) => question.id));
   for (const questionId of Object.keys(answers)) {
-    if (!requiredQuestionIds.has(questionId)) {
+    if (!knownQuestionIds.has(questionId)) {
       throw new AssessmentSubmissionError(
-        "unknown-question",
-        `The assessment contains an unexpected question (${questionId}). Please review your answers and try again.`,
+        "invalid-answer",
+        `Question "${questionId}" is not part of this questionnaire. Please review your answers and try again.`,
       );
     }
   }
 
-  // Resolve every answer against the trusted configuration.
+  const answeredQuestionIds = new Set(Object.keys(answers));
+  if (answeredQuestionIds.size !== questions.length) {
+    throw new AssessmentSubmissionError(
+      "incomplete",
+      `The assessment is incomplete. Please answer all ${questions.length} questions before submitting.`,
+    );
+  }
+
+  const seen = new Set<string>();
+  for (const question of questions) {
+    if (seen.has(question.id)) {
+      throw new AssessmentSubmissionError(
+        "questionnaire-misconfigured",
+        "The questionnaire is not configured correctly. Please try again later.",
+      );
+    }
+    seen.add(question.id);
+  }
+
+  // Resolve and validate every answer against the trusted question set.
   const resolvedAnswers: ValidatedAnswer[] = [];
   for (const question of questions) {
     const answerKey = answers[question.id];
     if (!answerKey) {
       throw new AssessmentSubmissionError(
         "incomplete",
-        "The assessment is incomplete. Please answer all 20 questions.",
+        `The assessment is incomplete. Please answer all ${questions.length} questions before submitting.`,
       );
     }
-    const optionIndex = question.options.findIndex(
-      (option) => option.id === answerKey,
-    );
-    if (optionIndex === -1) {
+    const option = question.options.find((candidate) => candidate.id === answerKey);
+    if (!option) {
       throw new AssessmentSubmissionError(
         "invalid-answer",
         `Answer "${answerKey}" is not a valid option for question ${question.id}. Please review your answers and try again.`,
       );
     }
-    const option = question.options[optionIndex];
     resolvedAnswers.push({
       questionId: question.id,
       answerKey: option.id,
-      numericValue: getNumericValue(question.type, optionIndex),
+      numericValue: option.numericValue,
       weights: option.weights,
     });
   }
@@ -260,8 +220,8 @@ export function scoreAssessment(input: ScoreAssessmentInput): AssessmentScoreRes
     }
   }
 
-  // Theoretical maximum raw score per concentration, derived from the
-  // question configuration (max option weight per question, summed).
+  // Theoretical maximum raw score per concentration, derived from the trusted
+  // question set (max option weight per question, summed).
   const maxScores: Record<string, number> = getMaxScoresForConcentrations(
     questions,
     concentrations,
@@ -289,23 +249,13 @@ export function scoreAssessment(input: ScoreAssessmentInput): AssessmentScoreRes
     return 0;
   });
 
-  // Deterministic tie handling.
-  const tieBreakerQuestions: TieBreakerQuestion[] = questions
-    .map((question, order) => ({
-      id: question.id,
-      priority: question.tieBreakerPriority,
-      order,
-    }))
-    .filter(
-      (question): question is TieBreakerQuestion =>
-        question.priority !== undefined,
-    )
-    .sort((a, b) => a.priority - b.priority || a.order - b.order);
-
+  // Deterministic tie handling (documented in lib/scoring/tie-break.ts):
+  //   1. highest normalized score,
+  //   2. number of strong responses (weight >= 4) for the concentration,
+  //   3. fixed major-specific concentration fallback order.
   const tieBreakContext: TieBreakContext = {
     major,
     weightsByQuestion: rawByQuestion,
-    tieBreakerQuestions,
   };
   const { winner, stage, note } = resolveTieBreak(ranked, tieBreakContext);
 

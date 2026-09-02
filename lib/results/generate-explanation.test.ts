@@ -2,8 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Concentration } from "@/data/concentrations";
 import type { Major } from "@/lib/major";
 import { scoreAssessment } from "@/lib/scoring/score-assessment";
-import { getInformaticsScoringConfig } from "@/lib/scoring/server/informaticsWeights";
-import { getInformationSystemsScoringConfig } from "@/lib/scoring/server/informationSystemsWeights";
+import { getLegacyQuestionSet } from "@/lib/scoring/test-question-set";
 import {
   generateResultExplanation,
   type ExplanationInput,
@@ -16,13 +15,11 @@ import {
 
 /**
  * This test drives `scoreAssessment`, so it needs the authoritative weighted
- * configuration (never the weight-free public view used by the UI).
+ * configuration (never the weight-free public view used by the UI). The
+ * legacy question bank is used because it is what seeded the database.
  */
 function getScoringQuestions(major: Major) {
-  if (major === "INFORMATICS") {
-    return getInformaticsScoringConfig().questions;
-  }
-  return getInformationSystemsScoringConfig().questions;
+  return getLegacyQuestionSet(major).questions;
 }
 
 type AnyQuestion = ReturnType<typeof getScoringQuestions>[number];
@@ -67,7 +64,11 @@ function withOverrides(
 
 /** Builds the ExplanationInput from a scored answer set. */
 function storedInput(major: Major, answers: Record<string, string>): ExplanationInput {
-  const scored = scoreAssessment({ major, answers });
+  const scored = scoreAssessment({
+    major,
+    answers,
+    questionSet: getLegacyQuestionSet(major),
+  });
   return {
     major,
     recommendedConcentration: scored.recommendedConcentration,

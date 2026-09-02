@@ -6,18 +6,18 @@ import type {
 } from "@/lib/scoring/types";
 
 /**
- * Deterministic tie handling (STEP 7, requirements 17–20).
+ * Deterministic tie handling (STEP 7, updated for database-managed weights).
  *
  * The recommendation always uses normalized scores. When scores tie, the
  * winner is resolved through an explicit, documented sequence:
  *
  *   1. Highest normalized score (values rounded to 1 decimal place, i.e. the
  *      exact values stored in the database).
- *   2. Highest raw score.
- *   3. High-value differentiator ("tie-breaker") questions from STEP 4/5
- *      metadata (`tieBreakerPriority`, 1 = strongest), evaluated in priority
- *      order, then questionnaire order.
- *   4. A documented fixed concentration priority order (below).
+ *   2. Number of STRONG responses for that concentration — questions where
+ *      the selected answer carried a weight >= 4. This is the database-era
+ *      equivalent of the old raw-score stage: it prefers the concentration
+ *      that the student indicated strongly on more questions.
+ *   3. A documented fixed concentration priority order (below).
  *
  * Math.random(), database row order, and object-key iteration are NEVER used
  * as tie-breakers — identical answers always produce the same winner.
@@ -39,6 +39,9 @@ export const FIXED_CONCENTRATION_PRIORITY: Record<Major, readonly Concentration[
   INFORMATION_SYSTEMS: ["DATA_SCIENCE", "ERP"],
 };
 
+/** A weight at or above this value counts as a "strong" response. */
+export const STRONG_RESPONSE_WEIGHT = 4;
+
 /**
  * Stable descending comparison for ranking: normalized score desc, then raw
  * score desc. Equal scores return 0 so the caller's explicit tie-break logic
@@ -54,15 +57,6 @@ export function compareScoredDesc(a: ScoredConcentration, b: ScoredConcentration
   return 0;
 }
 
-/** One high-value differentiator question used at tie-break stage 3. */
-export type TieBreakerQuestion = {
-  id: string;
-  /** Lower number = stronger differentiator (1 is the strongest). */
-  priority: number;
-  /** 0-based position in the questionnaire, for stable ordering. */
-  order: number;
-};
-
 export type TieBreakContext = {
   major: Major;
   /**
@@ -70,7 +64,6 @@ export type TieBreakContext = {
    * keyed by concentration then question id.
    */
   weightsByQuestion: Record<Concentration, Record<string, number>>;
-  tieBreakerQuestions: readonly TieBreakerQuestion[];
 };
 
 export type TieBreakOutcome = {
@@ -78,6 +71,17 @@ export type TieBreakOutcome = {
   stage: TieBreakStage;
   note: string;
 };
+
+/** Number of questions where the concentration earned a strong weight (>= 4). */
+export function countStrongResponses(
+  context: TieBreakContext,
+  concentration: Concentration,
+): number {
+  const byQuestion = context.weightsByQuestion[concentration] ?? {};
+  return Object.values(byQuestion).filter(
+    (weight) => weight >= STRONG_RESPONSE_WEIGHT,
+  ).length;
+}
 
 /**
  * Resolves the winner from a fully scored set using the documented
@@ -107,43 +111,28 @@ export function resolveTieBreak(
     };
   }
 
-  // Stage 2 — highest raw score among the normalized tie.
-  const topRaw = Math.max(...candidates.map((candidate) => candidate.rawScore));
-  candidates = candidates.filter((candidate) => candidate.rawScore === topRaw);
+  // Stage 2 — most strong responses (selected answers with weight >= 4).
+  const strongCounts = new Map(
+    candidates.map((candidate) => [
+      candidate.concentration,
+      countStrongResponses(context, candidate.concentration),
+    ]),
+  );
+  const topStrongCount = Math.max(...strongCounts.values());
+  candidates = candidates.filter(
+    (candidate) => strongCounts.get(candidate.concentration) === topStrongCount,
+  );
   if (candidates.length === 1) {
     return {
       winner: candidates[0],
-      stage: "raw-score",
+      stage: "strong-responses",
       note: `Normalized scores tied at ${topNormalized.toFixed(
         1,
-      )}; the highest raw score (${topRaw}) decided it.`,
+      )}; the concentration with the most strong responses (weight >= ${STRONG_RESPONSE_WEIGHT}, count ${topStrongCount}) decided it.`,
     };
   }
 
-  // Stage 3 — high-value tie-breaker questions, priority order then
-  // questionnaire order. A question only narrows the field when the tied
-  // concentrations differ on it.
-  const orderedTieBreakers = [...context.tieBreakerQuestions].sort(
-    (a, b) => a.priority - b.priority || a.order - b.order,
-  );
-  for (const question of orderedTieBreakers) {
-    const weightFor = (candidate: ScoredConcentration) =>
-      context.weightsByQuestion[candidate.concentration]?.[question.id] ?? 0;
-    const maxWeight = Math.max(...candidates.map(weightFor));
-    const remaining = candidates.filter(
-      (candidate) => weightFor(candidate) === maxWeight,
-    );
-    if (remaining.length === 1) {
-      return {
-        winner: remaining[0],
-        stage: "tie-breaker-question",
-        note: `Tied on normalized and raw scores; tie-breaker question ${question.id} (priority ${question.priority}) decided it with weight ${maxWeight}.`,
-      };
-    }
-    candidates = remaining;
-  }
-
-  // Stage 4 — documented fixed priority order (final deterministic fallback).
+  // Stage 3 — documented fixed priority order (final deterministic fallback).
   const priority = FIXED_CONCENTRATION_PRIORITY[context.major];
   const winner = priority
     .map((concentration) =>
@@ -155,8 +144,8 @@ export function resolveTieBreak(
 
   if (!winner) {
     // Defensive: a concentration outside the documented priority list could
-    // only appear if the question configuration changes. Fall back to the
-    // first candidate in questionnaire order (still fully deterministic).
+    // only appear if the questionnaire configuration changes. Fall back to
+    // the first candidate in questionnaire order (still fully deterministic).
     const defensiveWinner = candidates[0];
     return {
       winner: defensiveWinner,
@@ -171,3 +160,4 @@ export function resolveTieBreak(
     note: `Tied on every score-based stage; the fixed priority order chose ${winner.concentration}.`,
   };
 }
+
