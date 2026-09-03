@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { ClearAssessmentSession } from "@/components/assessment/ClearAssessmentSession";
 import { Card } from "@/components/ui/Card";
+import { ConcentrationProgramCard } from "@/components/results/ConcentrationProgramCard";
 import { ConcentrationScoreList } from "@/components/results/ConcentrationScoreList";
 import { RecommendationCard } from "@/components/results/RecommendationCard";
 import { RecommendationExplanation } from "@/components/results/RecommendationExplanation";
@@ -188,6 +189,10 @@ export default async function AssessmentResultPage({
           <ConcentrationScoreList
             scores={validated.scores}
             recommendedConcentration={validated.recommendedConcentration}
+          />
+
+          <ConcentrationProgramCard
+            concentration={validated.recommendedConcentration}
           />
 
           <Card className="p-6 sm:p-8">

@@ -4,7 +4,11 @@ import { notFound } from "next/navigation";
 
 import { DeleteAssessmentButton } from "@/components/admin/assessments/DeleteAssessmentButton";
 import { Card } from "@/components/ui/Card";
-import { getConcentrationLabel } from "@/data/concentrations";
+import { ConcentrationProgramCard } from "@/components/results/ConcentrationProgramCard";
+import {
+  getConcentrationLabel,
+  type Concentration,
+} from "@/data/concentrations";
 import {
   buildAssessmentListHref,
   parseAssessmentListParams,
@@ -143,6 +147,7 @@ export default async function AdminAssessmentDetailPage({
       completedDateTime={completedDateTime}
       recommendedLabel={getConcentrationLabel(assessment.recommendedConcentration)}
       recommendedScore={formatSuitabilityScore(assessment.recommendedScore)}
+      recommendedConcentration={assessment.recommendedConcentration}
       confidenceLabel={assessment.confidenceLabel}
       scores={scores}
       answerRows={answerRows}
@@ -160,6 +165,7 @@ type DetailContentProps = {
   completedDateTime: string;
   recommendedLabel: string;
   recommendedScore: string;
+  recommendedConcentration: Concentration;
   confidenceLabel: string | null;
   scores: ReturnType<typeof resolveConcentrationScores>;
   answerRows: ReturnType<typeof resolveAssessmentAnswers>;
@@ -175,6 +181,7 @@ function AssessmentDetailContent({
   completedDateTime,
   recommendedLabel,
   recommendedScore,
+  recommendedConcentration,
   confidenceLabel,
   scores,
   answerRows,
@@ -274,6 +281,9 @@ function AssessmentDetailContent({
           </table>
         </div>
       </Card>
+
+      {/* Recommended concentration program (Semester 4 focus) */}
+      <ConcentrationProgramCard concentration={recommendedConcentration} />
 
       {/* Stored answers */}
       <Card className="p-5 sm:p-6">
