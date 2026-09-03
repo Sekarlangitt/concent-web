@@ -19,7 +19,8 @@ export type Concentration =
   | "GAME_DEVELOPMENT"
   | "DEVOPS"
   | "DATA_SCIENCE"
-  | "ERP";
+  | "ERP"
+  | "BPA";
 
 export const CONCENTRATION_IDS: readonly Concentration[] = [
   "CYBER_SECURITY",
@@ -30,6 +31,7 @@ export const CONCENTRATION_IDS: readonly Concentration[] = [
   "DEVOPS",
   "DATA_SCIENCE",
   "ERP",
+  "BPA",
 ];
 
 export const CONCENTRATION_LABELS: Record<Concentration, string> = {
@@ -39,8 +41,9 @@ export const CONCENTRATION_LABELS: Record<Concentration, string> = {
   AI_HEALTHCARE: "Artificial Intelligence (AI) in Healthcare",
   GAME_DEVELOPMENT: "Game Development",
   DEVOPS: "DevOps",
-  DATA_SCIENCE: "Data Science",
-  ERP: "Enterprise Resource Planning (ERP)",
+  DATA_SCIENCE: "Data Science for Business Analytics",
+  ERP: "Intelligent Enterprise Systems",
+  BPA: "AI-Powered Enterprise Automation",
 };
 
 export const CONCENTRATIONS_BY_MAJOR: Record<Major, readonly Concentration[]> =
@@ -53,7 +56,7 @@ export const CONCENTRATIONS_BY_MAJOR: Record<Major, readonly Concentration[]> =
       "GAME_DEVELOPMENT",
       "DEVOPS",
     ],
-    INFORMATION_SYSTEMS: ["DATA_SCIENCE", "ERP"],
+    INFORMATION_SYSTEMS: ["DATA_SCIENCE", "ERP", "BPA"],
   };
 
 export function getConcentrationLabel(concentration: Concentration): string {

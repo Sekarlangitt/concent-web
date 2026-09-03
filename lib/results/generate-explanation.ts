@@ -97,6 +97,7 @@ const CONCENTRATION_SUMMARY_THEMES: Record<Concentration, string> = {
   DEVOPS: "automation, infrastructure, deployment, and reliable cloud operations",
   DATA_SCIENCE: "data analysis, prediction, visualization, and evidence-based decisions",
   ERP: "business processes, integrated enterprise systems, and organizational workflows",
+  BPA: "AI-driven automation, workflow design, low-code systems, and intelligent business operations",
 };
 
 /** Human-readable theme phrase for each question category (both majors). */
@@ -161,6 +162,7 @@ const SECOND_CONCENTRATION_THEMES: Record<Concentration, string> = {
   DEVOPS: "projects involving automation, infrastructure, and reliable deployments",
   DATA_SCIENCE: "projects involving data analysis, prediction, and visualization",
   ERP: "projects involving business processes and integrated enterprise systems",
+  BPA: "projects involving workflow automation, process intelligence, and AI-enabled operations",
 };
 
 const GENERIC_IMMERSIVE_THEME = "immersive and interactive experiences";

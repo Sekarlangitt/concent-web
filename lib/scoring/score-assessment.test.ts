@@ -869,6 +869,7 @@ describe("FIXED_CONCENTRATION_PRIORITY — documented fallback order", () => {
     expect(FIXED_CONCENTRATION_PRIORITY.INFORMATION_SYSTEMS).toEqual([
       "DATA_SCIENCE",
       "ERP",
+      "BPA",
     ]);
   });
 });

@@ -33,6 +33,7 @@ enum Concentration {
   DEVOPS
   DATA_SCIENCE
   ERP
+  BPA
 }
 
 enum QuestionnaireStatus {

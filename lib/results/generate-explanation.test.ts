@@ -255,7 +255,7 @@ describe("generateResultExplanation — Information Systems", () => {
     expect(input.recommendedConcentration).toBe("ERP");
 
     const explanation = generateResultExplanation(input);
-    expect(explanation.summary).toContain("Enterprise Resource Planning (ERP)");
+    expect(explanation.summary).toContain("Intelligent Enterprise Systems");
     expect(explanation.summary).toContain("business processes");
     expect(explanation.summary).not.toContain("data analysis");
     expect(explanation.summary).not.toContain("visualization");

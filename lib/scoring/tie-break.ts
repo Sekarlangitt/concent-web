@@ -36,7 +36,7 @@ export const FIXED_CONCENTRATION_PRIORITY: Record<Major, readonly Concentration[
     "GAME_DEVELOPMENT",
     "DEVOPS",
   ],
-  INFORMATION_SYSTEMS: ["DATA_SCIENCE", "ERP"],
+  INFORMATION_SYSTEMS: ["DATA_SCIENCE", "ERP", "BPA"],
 };
 
 /** A weight at or above this value counts as a "strong" response. */
