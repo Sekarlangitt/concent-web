@@ -5,6 +5,7 @@ import { ClearAssessmentSession } from "@/components/assessment/ClearAssessmentS
 import { Card } from "@/components/ui/Card";
 import { ConcentrationProgramCard } from "@/components/results/ConcentrationProgramCard";
 import { ConcentrationScoreList } from "@/components/results/ConcentrationScoreList";
+import { ScoreCalculationCard } from "@/components/results/ScoreCalculationCard";
 import { RecommendationCard } from "@/components/results/RecommendationCard";
 import { RecommendationExplanation } from "@/components/results/RecommendationExplanation";
 import { ResultDisclaimer } from "@/components/results/ResultDisclaimer";
@@ -138,6 +139,28 @@ export default async function AssessmentResultPage({
       : null,
   });
 
+  // Transparency data: rebuild every answer option's weight per question from
+  // the locked questionnaire version the student actually answered.
+  const breakdownQuestions = assessment.questionnaireVersion
+    ? assessment.questionnaireVersion.questions.map((question) => ({
+        id: question.id,
+        order: question.order,
+        text: question.text,
+        options: question.options.map((option) => ({
+          id: option.id,
+          label: option.label,
+          weights: option.weights.map((weight) => ({
+            concentration: weight.concentration,
+            weight: weight.weight,
+          })),
+        })),
+      }))
+    : null;
+  const breakdownAnswers = assessment.answers.map((answer) => ({
+    questionId: answer.questionId,
+    answerKey: answer.answerKey,
+  }));
+
   const completedDate = new Intl.DateTimeFormat("en", {
     dateStyle: "medium",
   }).format(assessment.completedAt ?? assessment.createdAt);
@@ -193,6 +216,13 @@ export default async function AssessmentResultPage({
 
           <ConcentrationProgramCard
             concentration={validated.recommendedConcentration}
+          />
+
+          <ScoreCalculationCard
+            scores={validated.scores}
+            recommendedConcentration={validated.recommendedConcentration}
+            questions={breakdownQuestions}
+            answers={breakdownAnswers}
           />
 
           <Card className="p-6 sm:p-8">

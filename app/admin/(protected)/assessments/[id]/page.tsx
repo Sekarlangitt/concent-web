@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { DeleteAssessmentButton } from "@/components/admin/assessments/DeleteAssessmentButton";
 import { Card } from "@/components/ui/Card";
 import { ConcentrationProgramCard } from "@/components/results/ConcentrationProgramCard";
+import { ScoreCalculationCard } from "@/components/results/ScoreCalculationCard";
 import {
   getConcentrationLabel,
   type Concentration,
@@ -24,6 +25,10 @@ import {
 import { requireAdmin } from "@/lib/auth/admin";
 import { getMajorLabel } from "@/lib/major";
 import { formatSuitabilityScore } from "@/lib/results/format-score";
+import type {
+  BreakdownAnswer,
+  BreakdownQuestion,
+} from "@/lib/results/score-breakdown";
 
 export const metadata: Metadata = {
   title: "Assessment Details | President University",
@@ -124,6 +129,28 @@ export default async function AdminAssessmentDetailPage({
     })),
   );
 
+  // Transparency data: rebuild every answer option's weight per question from
+  // the questionnaire version the assessment referenced (weights included).
+  const breakdownQuestions = assessment.questionnaireVersion
+    ? assessment.questionnaireVersion.questions.map((question) => ({
+        id: question.id,
+        order: question.order,
+        text: question.text,
+        options: question.options.map((option) => ({
+          id: option.id,
+          label: option.label,
+          weights: option.weights.map((weight) => ({
+            concentration: weight.concentration,
+            weight: weight.weight,
+          })),
+        })),
+      }))
+    : null;
+  const breakdownAnswers = storedAnswers.map((answer) => ({
+    questionId: answer.questionId,
+    answerKey: answer.answerKey,
+  }));
+
   const versionLabel = assessment.questionnaireVersion
     ? `${getMajorLabel(assessment.major)} Version ${assessment.questionnaireVersion.versionNumber}`
     : "Legacy Questionnaire";
@@ -150,6 +177,8 @@ export default async function AdminAssessmentDetailPage({
       recommendedConcentration={assessment.recommendedConcentration}
       confidenceLabel={assessment.confidenceLabel}
       scores={scores}
+      breakdownQuestions={breakdownQuestions}
+      breakdownAnswers={breakdownAnswers}
       answerRows={answerRows}
       completeness={completeness}
     />
@@ -168,6 +197,8 @@ type DetailContentProps = {
   recommendedConcentration: Concentration;
   confidenceLabel: string | null;
   scores: ReturnType<typeof resolveConcentrationScores>;
+  breakdownQuestions: readonly BreakdownQuestion[] | null;
+  breakdownAnswers: readonly BreakdownAnswer[];
   answerRows: ReturnType<typeof resolveAssessmentAnswers>;
   completeness: { expected: number; actual: number; complete: boolean };
 };
@@ -184,6 +215,8 @@ function AssessmentDetailContent({
   recommendedConcentration,
   confidenceLabel,
   scores,
+  breakdownQuestions,
+  breakdownAnswers,
   answerRows,
   completeness,
 }: DetailContentProps) {
@@ -284,6 +317,14 @@ function AssessmentDetailContent({
 
       {/* Recommended concentration program (Semester 4 focus) */}
       <ConcentrationProgramCard concentration={recommendedConcentration} />
+
+      {/* How the scores were calculated (real weights transparency) */}
+      <ScoreCalculationCard
+        scores={scores}
+        recommendedConcentration={recommendedConcentration}
+        questions={breakdownQuestions}
+        answers={breakdownAnswers}
+      />
 
       {/* Stored answers */}
       <Card className="p-5 sm:p-6">

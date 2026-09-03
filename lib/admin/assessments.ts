@@ -107,7 +107,12 @@ export async function getAssessmentDetail(id: string) {
         include: {
           questions: {
             orderBy: { order: "asc" },
-            include: { options: { orderBy: { order: "asc" } } },
+            include: {
+              options: {
+                orderBy: { order: "asc" },
+                include: { weights: true },
+              },
+            },
           },
         },
       },
